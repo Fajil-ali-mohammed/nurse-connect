@@ -479,19 +479,23 @@ const SwapView = ({
       setIncomingRequests(incoming || []);
 
       // Swap history (both sent and received)
-      const { data: history } = await supabase
-        .from("shift_swap_requests")
-        .select(`
-          id, status, created_at, requester_nurse_id, target_nurse_id,
-          requester:nurses!shift_swap_requests_requester_nurse_id_fkey(name),
-          target:nurses!shift_swap_requests_target_nurse_id_fkey(name),
-          requester_schedule:schedules!shift_swap_requests_requester_schedule_id_fkey(duty_date, shift_type, department:departments(name))
-        `)
-        .or(`requester_nurse_id.eq.${nurseId},target_nurse_id.eq.${nurseId}`)
-        .order("created_at", { ascending: false })
-        .limit(10);
+      const queryStr = `
+        id, status, created_at, requester_nurse_id, target_nurse_id,
+        requester:nurses!shift_swap_requests_requester_nurse_id_fkey(name),
+        target:nurses!shift_swap_requests_target_nurse_id_fkey(name),
+        requester_schedule:schedules!shift_swap_requests_requester_schedule_id_fkey(duty_date, shift_type, department:departments(name))
+      `;
+      
+      const [sentRes, receivedRes] = await Promise.all([
+        supabase.from("shift_swap_requests").select(queryStr).eq("requester_nurse_id", nurseId).order("created_at", { ascending: false }).limit(10),
+        supabase.from("shift_swap_requests").select(queryStr).eq("target_nurse_id", nurseId).order("created_at", { ascending: false }).limit(10)
+      ]);
 
-      setSwapHistory(history || []);
+      const history = [...(sentRes.data || []), ...(receivedRes.data || [])]
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, 10);
+
+      setSwapHistory(history);
       setLoading(false);
     };
     fetchData();

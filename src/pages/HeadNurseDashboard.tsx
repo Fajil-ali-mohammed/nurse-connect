@@ -9,6 +9,10 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import {
   Calendar, Users, ArrowLeftRight, ClipboardCheck, UserPlus, LogOut,
   Menu, X, Check, XCircle, Search, Star, Trash2, Loader2, Wand2, User, Edit3
 } from "lucide-react";
@@ -512,17 +516,42 @@ const HNSwapView = () => {
 // ─── Performance View ───────────────────────────────────────────
 
 const HNPerformanceView = () => {
+  const { user } = useAuth();
   const [nurses, setNurses] = useState<any[]>([]);
   const [evaluations, setEvaluations] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
+  
+  // Evaluation Modal State
+  const [selectedNurse, setSelectedNurse] = useState<any>(null);
+  const [attendance, setAttendance] = useState("");
+  const [quality, setQuality] = useState("");
+  const [reliability, setReliability] = useState("");
+  const [remarks, setRemarks] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    if (!user) return;
     const fetchData = async () => {
+      // 1. Get head nurse dept
+      const { data: hn } = await supabase
+        .from("head_nurses")
+        .select("department_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      const deptId = hn?.department_id;
+      if (!deptId) {
+        setLoading(false);
+        return;
+      }
+
+      // 2. Fetch scoped nurses and evals
       const [nursesRes, evalsRes] = await Promise.all([
         supabase
           .from("nurses")
           .select("id, name, division_id, current_department_id, experience_years, divisions:divisions(name), departments:departments(name)")
-          .eq("is_active", true),
+          .eq("is_active", true)
+          .eq("current_department_id", deptId),
         supabase
           .from("performance_evaluations")
           .select("nurse_id, overall_score, attendance_score, quality_score, reliability_score, evaluation_period, remarks")
@@ -544,7 +573,50 @@ const HNPerformanceView = () => {
       setLoading(false);
     };
     fetchData();
-  }, []);
+  }, [user]);
+
+  const handleOpenEvaluation = (nurse: any) => {
+    setSelectedNurse(nurse);
+    const ev = evaluations[nurse.id];
+    setAttendance(ev?.attendance_score || "");
+    setQuality(ev?.quality_score || "");
+    setReliability(ev?.reliability_score || "");
+    setRemarks(ev?.remarks || "");
+  };
+
+  const handleSaveEvaluation = async () => {
+    if (!selectedNurse || !user) return;
+    setSaving(true);
+    
+    const att = Number(attendance);
+    const qual = Number(quality);
+    const rel = Number(reliability);
+    const overall = Math.round((att + qual + rel) / 3);
+
+    const payload = {
+      nurse_id: selectedNurse.id,
+      evaluated_by: user.id,
+      attendance_score: att,
+      quality_score: qual,
+      reliability_score: rel,
+      overall_score: overall,
+      remarks,
+      evaluation_period: new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" })
+    };
+
+    try {
+      const { error } = await supabase.from("performance_evaluations").insert(payload);
+      if (error) throw error;
+      
+      toast({ title: "Evaluation Saved", description: `Updated performance for ${selectedNurse.name}` });
+      setEvaluations(prev => ({ ...prev, [selectedNurse.id]: payload }));
+      setSelectedNurse(null);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
@@ -568,7 +640,11 @@ const HNPerformanceView = () => {
             const reliabilityScore = ev?.reliability_score ? Number(ev.reliability_score) : null;
 
             return (
-              <div key={n.id} className="rounded-xl bg-card p-5 shadow-card">
+              <div 
+                key={n.id} 
+                className="rounded-xl bg-card p-5 shadow-card cursor-pointer hover:border-primary/50 transition-colors border-2 border-transparent"
+                onClick={() => handleOpenEvaluation(n)}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
@@ -600,7 +676,7 @@ const HNPerformanceView = () => {
                       <span>Reliability: {reliabilityScore ?? "—"}%</span>
                     </div>
                     {ev?.remarks && (
-                      <p className="mt-2 text-xs text-muted-foreground italic">"{ev.remarks}"</p>
+                      <p className="mt-2 text-xs text-muted-foreground italic truncate">"{ev.remarks}"</p>
                     )}
                   </>
                 ) : (
@@ -615,6 +691,40 @@ const HNPerformanceView = () => {
           })}
         </div>
       )}
+
+      {/* Evaluation Modal */}
+      <Dialog open={!!selectedNurse} onOpenChange={(open) => !open && setSelectedNurse(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Evaluate {selectedNurse?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Attendance Score (0-100)</Label>
+              <Input type="number" min="0" max="100" value={attendance} onChange={e => setAttendance(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Quality Score (0-100)</Label>
+              <Input type="number" min="0" max="100" value={quality} onChange={e => setQuality(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Reliability Score (0-100)</Label>
+              <Input type="number" min="0" max="100" value={reliability} onChange={e => setReliability(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Remarks</Label>
+              <Textarea placeholder="Any qualitative feedback..." value={remarks} onChange={e => setRemarks(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSelectedNurse(null)}>Cancel</Button>
+            <Button onClick={handleSaveEvaluation} disabled={saving}>
+              {saving ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
+              Save Evaluation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
