@@ -9,6 +9,10 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import {
   Calendar, Users, ArrowLeftRight, ClipboardCheck, UserPlus, LogOut,
   Menu, X, Check, XCircle, Search, Star, Trash2, Loader2, Wand2, User, Edit3
 } from "lucide-react";
@@ -198,10 +202,20 @@ interface ScheduleRow {
   department: { id: string; name: string } | null;
 }
 
+// Acuity colour map
+const ACUITY_COLORS: Record<string, string> = {
+  "Acuity 1": "bg-green-100 text-green-700 border-green-200",
+  "Acuity 2": "bg-blue-100 text-blue-700 border-blue-200",
+  "Acuity 3": "bg-amber-100 text-amber-700 border-amber-200",
+  "Acuity 4": "bg-rose-100 text-rose-700 border-rose-200",
+};
+
 const SHIFT_LABELS: Record<string, string> = {
-  morning: "Morning (6AM-2PM)",
-  evening: "Evening (2PM-10PM)",
-  night: "Night (10PM-6AM)",
+  day:     "Day Shift (6AM – 6PM)",
+  night:   "Night Shift (6PM – 6AM)",
+  // legacy labels for any old seeded data
+  morning: "Morning (6AM – 2PM)",
+  evening: "Evening (2PM – 10PM)",
 };
 
 const HNScheduleView = () => {
@@ -381,7 +395,11 @@ const HNScheduleView = () => {
                   <td className="px-4 py-3">
                     <Badge
                       className={
-                        s.shift_type === "morning"
+                        s.shift_type === "day"
+                          ? "bg-amber-100 text-amber-700 border-0"
+                          : s.shift_type === "night"
+                          ? "bg-indigo-100 text-indigo-700 border-0"
+                          : s.shift_type === "morning"
                           ? "bg-primary/10 text-primary border-0"
                           : s.shift_type === "evening"
                           ? "bg-accent/20 text-accent border-0"
@@ -422,7 +440,7 @@ const HNSwapView = () => {
           requester_schedule:schedules!shift_swap_requests_requester_schedule_id_fkey(duty_date, shift_type, department:departments(name)),
           target_schedule:schedules!shift_swap_requests_target_schedule_id_fkey(duty_date, shift_type, department:departments(name))
         `)
-        .eq("status", "pending")
+        .in("status", ["pending_admin", "pending"])
         .order("created_at", { ascending: false });
 
       if (!error) setSwaps(data || []);
@@ -457,6 +475,7 @@ const HNSwapView = () => {
   return (
     <div className="space-y-4 animate-fade-in">
       <h2 className="text-lg font-bold text-foreground">Pending Swap Requests</h2>
+      <p className="text-xs text-muted-foreground -mt-2">Swaps are only permitted between nurses of the same Acuity level.</p>
       {swaps.length === 0 ? (
         <div className="rounded-xl bg-card p-12 text-center shadow-card">
           <ArrowLeftRight className="mx-auto h-10 w-10 text-muted-foreground/30" />
@@ -497,17 +516,42 @@ const HNSwapView = () => {
 // ─── Performance View ───────────────────────────────────────────
 
 const HNPerformanceView = () => {
+  const { user } = useAuth();
   const [nurses, setNurses] = useState<any[]>([]);
   const [evaluations, setEvaluations] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
+  
+  // Evaluation Modal State
+  const [selectedNurse, setSelectedNurse] = useState<any>(null);
+  const [attendance, setAttendance] = useState("");
+  const [quality, setQuality] = useState("");
+  const [reliability, setReliability] = useState("");
+  const [remarks, setRemarks] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    if (!user) return;
     const fetchData = async () => {
+      // 1. Get head nurse dept
+      const { data: hn } = await supabase
+        .from("head_nurses")
+        .select("department_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      const deptId = hn?.department_id;
+      if (!deptId) {
+        setLoading(false);
+        return;
+      }
+
+      // 2. Fetch scoped nurses and evals
       const [nursesRes, evalsRes] = await Promise.all([
         supabase
           .from("nurses")
           .select("id, name, division_id, current_department_id, experience_years, divisions:divisions(name), departments:departments(name)")
-          .eq("is_active", true),
+          .eq("is_active", true)
+          .eq("current_department_id", deptId),
         supabase
           .from("performance_evaluations")
           .select("nurse_id, overall_score, attendance_score, quality_score, reliability_score, evaluation_period, remarks")
@@ -529,7 +573,63 @@ const HNPerformanceView = () => {
       setLoading(false);
     };
     fetchData();
-  }, []);
+  }, [user]);
+
+  const handleOpenEvaluation = (nurse: any) => {
+    setSelectedNurse(nurse);
+    const ev = evaluations[nurse.id];
+    setAttendance(ev?.attendance_score || "");
+    setQuality(ev?.quality_score || "");
+    setReliability(ev?.reliability_score || "");
+    setRemarks(ev?.remarks || "");
+  };
+
+  const handleSaveEvaluation = async () => {
+    if (!selectedNurse || !user) return;
+    setSaving(true);
+    
+    if (attendance === "" || quality === "" || reliability === "") {
+      toast({ title: "Validation Error", description: "Please fill in all score fields.", variant: "destructive" });
+      setSaving(false);
+      return;
+    }
+
+    const att = Number(attendance);
+    const qual = Number(quality);
+    const rel = Number(reliability);
+
+    if (att < 0 || att > 100 || qual < 0 || qual > 100 || rel < 0 || rel > 100) {
+      toast({ title: "Validation Error", description: "Scores must be between 0 and 100.", variant: "destructive" });
+      setSaving(false);
+      return;
+    }
+
+    const overall = Math.round((att + qual + rel) / 3);
+
+    const payload = {
+      nurse_id: selectedNurse.id,
+      evaluated_by: user.id,
+      attendance_score: att,
+      quality_score: qual,
+      reliability_score: rel,
+      overall_score: overall,
+      remarks,
+      evaluation_period: new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" })
+    };
+
+    try {
+      const { error } = await supabase.from("performance_evaluations").insert(payload);
+      if (error) throw error;
+      
+      toast({ title: "Evaluation Saved", description: `Updated performance for ${selectedNurse.name}` });
+      setEvaluations(prev => ({ ...prev, [selectedNurse.id]: payload }));
+      setSelectedNurse(null);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
@@ -553,7 +653,11 @@ const HNPerformanceView = () => {
             const reliabilityScore = ev?.reliability_score ? Number(ev.reliability_score) : null;
 
             return (
-              <div key={n.id} className="rounded-xl bg-card p-5 shadow-card">
+              <div 
+                key={n.id} 
+                className="rounded-xl bg-card p-5 shadow-card cursor-pointer hover:border-primary/50 transition-colors border-2 border-transparent"
+                onClick={() => handleOpenEvaluation(n)}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
@@ -562,7 +666,10 @@ const HNPerformanceView = () => {
                     <div>
                       <p className="text-sm font-bold text-foreground">{n.name}</p>
                       <p className="text-xs text-muted-foreground">
-                        {n.divisions?.name || "No Division"} • {n.departments?.name || "Unassigned"}
+                        {n.divisions?.name
+                          ? <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${ACUITY_COLORS[n.divisions.name] || "bg-muted text-muted-foreground"}`}>{n.divisions.name}</span>
+                          : "No Acuity"}
+                        {" "}{n.departments?.name || "Unassigned"}
                       </p>
                     </div>
                   </div>
@@ -582,7 +689,7 @@ const HNPerformanceView = () => {
                       <span>Reliability: {reliabilityScore ?? "—"}%</span>
                     </div>
                     {ev?.remarks && (
-                      <p className="mt-2 text-xs text-muted-foreground italic">"{ev.remarks}"</p>
+                      <p className="mt-2 text-xs text-muted-foreground italic truncate">"{ev.remarks}"</p>
                     )}
                   </>
                 ) : (
@@ -597,6 +704,40 @@ const HNPerformanceView = () => {
           })}
         </div>
       )}
+
+      {/* Evaluation Modal */}
+      <Dialog open={!!selectedNurse} onOpenChange={(open) => !open && setSelectedNurse(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Evaluate {selectedNurse?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Attendance Score (0-100)</Label>
+              <Input type="number" min="0" max="100" value={attendance} onChange={e => setAttendance(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Quality Score (0-100)</Label>
+              <Input type="number" min="0" max="100" value={quality} onChange={e => setQuality(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Reliability Score (0-100)</Label>
+              <Input type="number" min="0" max="100" value={reliability} onChange={e => setReliability(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Remarks</Label>
+              <Textarea placeholder="Any qualitative feedback..." value={remarks} onChange={e => setRemarks(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSelectedNurse(null)}>Cancel</Button>
+            <Button onClick={handleSaveEvaluation} disabled={saving}>
+              {saving ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
+              Save Evaluation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
@@ -604,40 +745,73 @@ const HNPerformanceView = () => {
 // ─── Manage Nurses View ─────────────────────────────────────────
 
 const HNManageView = () => {
+  const { user } = useAuth();
   const [showAdd, setShowAdd] = useState(false);
   const [nurses, setNurses] = useState<any[]>([]);
-  const [divisions, setDivisions] = useState<any[]>([]);
-  const [departments, setDepartments] = useState<any[]>([]);
+  const [acuityLevels, setAcuityLevels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  const [assigningAcuity, setAssigningAcuity] = useState<Record<string, boolean>>({});
+
+  // The head nurse's own department (resolved once on mount)
+  const [myDeptId, setMyDeptId] = useState<string | null>(null);
+  const [myDeptName, setMyDeptName] = useState<string | null>(null);
 
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
   const [newAge, setNewAge] = useState("");
   const [newGender, setNewGender] = useState("");
   const [newDivisionId, setNewDivisionId] = useState("");
-  const [newDeptId, setNewDeptId] = useState("");
   const [newExperience, setNewExperience] = useState("");
   const [newExamScore, setNewExamScore] = useState("");
 
-  const fetchData = useCallback(async () => {
-    const [nursesRes, divsRes, deptsRes] = await Promise.all([
-      supabase.from("nurses").select("id, name, phone, age, gender, experience_years, exam_score_percentage, division_id, current_department_id, is_active, divisions:divisions(name), departments:departments(name)").eq("is_active", true),
-      supabase.from("divisions").select("id, name"),
-      supabase.from("departments").select("id, name"),
+  // Step 1 — resolve HN's department, then step 2 — fetch scoped nurses
+  const fetchData = useCallback(async (deptId: string) => {
+    const [nursesRes, divsRes] = await Promise.all([
+      supabase
+        .from("nurses")
+        .select("id, name, phone, age, gender, experience_years, exam_score_percentage, division_id, current_department_id, is_active, divisions:divisions(id, name, acuity_level), departments:departments(name)")
+        .eq("is_active", true)
+        .eq("current_department_id", deptId),   // ← scoped to THIS department only
+      supabase.from("divisions").select("id, name, acuity_level").order("acuity_level"),
     ]);
     setNurses(nursesRes.data || []);
-    setDivisions(divsRes.data || []);
-    setDepartments(deptsRes.data || []);
+    setAcuityLevels(divsRes.data || []);
     setLoading(false);
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    if (!user) return;
+    const init = async () => {
+      // Resolve the head nurse's department
+      const { data: hn } = await supabase
+        .from("head_nurses")
+        .select("department_id, departments:departments(name)")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      const deptId = hn?.department_id ?? null;
+      const deptName = (hn?.departments as any)?.name ?? null;
+      setMyDeptId(deptId);
+      setMyDeptName(deptName);
+
+      if (deptId) {
+        await fetchData(deptId);
+      } else {
+        setLoading(false); // no department assigned to this HN
+      }
+    };
+    init();
+  }, [user, fetchData]);
 
   const handleAddNurse = async () => {
     if (!newName || !newPhone) {
       toast({ title: "Missing fields", description: "Name and phone are required", variant: "destructive" });
+      return;
+    }
+    if (!myDeptId) {
+      toast({ title: "No department", description: "You have no department assigned yet.", variant: "destructive" });
       return;
     }
     setSaving(true);
@@ -647,7 +821,7 @@ const HNManageView = () => {
       age: newAge ? parseInt(newAge) : null,
       gender: newGender as any || null,
       division_id: newDivisionId || null,
-      current_department_id: newDeptId || null,
+      current_department_id: myDeptId,          // ← always assigned to HN's own dept
       experience_years: newExperience ? parseInt(newExperience) : 0,
       exam_score_percentage: newExamScore ? parseFloat(newExamScore) : null,
     });
@@ -655,13 +829,49 @@ const HNManageView = () => {
     if (error) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     } else {
-      toast({ title: "Nurse Added", description: `${newName} has been added to the system.` });
-      setNewName(""); setNewPhone(""); setNewAge(""); setNewGender(""); setNewDivisionId(""); setNewDeptId(""); setNewExperience(""); setNewExamScore("");
+      toast({ title: "Nurse Added", description: `${newName} has been added to ${myDeptName || "your department"}.` });
+      setNewName(""); setNewPhone(""); setNewAge(""); setNewGender(""); setNewDivisionId(""); setNewExperience(""); setNewExamScore("");
       setShowAdd(false);
-      fetchData();
+      fetchData(myDeptId);
     }
     setSaving(false);
   };
+
+  const handleAssignAcuity = async (nurseId: string, divisionId: string) => {
+    setAssigningAcuity((prev) => ({ ...prev, [nurseId]: true }));
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+
+      const res = await fetch(`${apiBase}/functions/nurses/${nurseId}/acuity`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ division_id: divisionId || null }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to update acuity");
+
+      // Update local state with the server's confirmed value
+      setNurses((prev) =>
+        prev.map((n) =>
+          n.id !== nurseId
+            ? n
+            : { ...n, division_id: json.division_id, divisions: json.divisions }
+        )
+      );
+      toast({ title: "Acuity Assigned", description: "Nurse acuity level updated." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setAssigningAcuity((prev) => ({ ...prev, [nurseId]: false }));
+    }
+  };
+
 
   const handleRemove = async (nurse: any) => {
     // Optimistically remove from UI so the row disappears immediately.
@@ -669,12 +879,23 @@ const HNManageView = () => {
     setNurses((prev) => prev.filter((n) => n.id !== nurse.id));
 
     const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
     const userId = sessionData.session?.user?.id;
+    const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
 
-    const { error } = await supabase.from("nurses").update({ is_active: false }).eq("id", nurse.id);
-    if (error) {
+    // Use direct fetch so update actually hits the DB (shim update() has a known silent-fail bug)
+    const updateRes = await fetch(`${apiBase}/functions/nurses/${nurse.id}/deactivate`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+    if (!updateRes.ok) {
       setNurses(previousNurses);
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      const errJson = await updateRes.json().catch(() => ({}));
+      toast({ title: "Error", description: errJson.error || "Failed to deactivate nurse", variant: "destructive" });
       return;
     }
 
@@ -690,7 +911,7 @@ const HNManageView = () => {
     }
 
     toast({ title: "Nurse Removed", description: `${nurse.name} has been deactivated.` });
-    fetchData();
+    if (myDeptId) fetchData(myDeptId);
   };
 
   const filtered = nurses.filter((n) => {
@@ -702,10 +923,23 @@ const HNManageView = () => {
     return <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
   }
 
+  if (!myDeptId) {
+    return (
+      <div className="rounded-xl bg-card p-14 text-center shadow-card">
+        <Users className="mx-auto h-10 w-10 text-muted-foreground/30" />
+        <p className="mt-4 text-sm font-medium text-foreground">No Department Assigned</p>
+        <p className="text-xs text-muted-foreground">Ask an Admin to assign you a department before managing nurses.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-bold text-foreground">Manage Nurses</h2>
+        <div>
+          <h2 className="text-lg font-bold text-foreground">Manage Nurses</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">{myDeptName} · {nurses.length} active nurses</p>
+        </div>
         <div className="flex items-center gap-2">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -734,26 +968,36 @@ const HNManageView = () => {
               </select>
             </div>
             <div className="space-y-2">
-              <Label>Division</Label>
+              <Label>Acuity Level</Label>
               <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={newDivisionId} onChange={(e) => setNewDivisionId(e.target.value)}>
-                <option value="">Select division</option>
-                {divisions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value="">Select acuity level</option>
+                {acuityLevels.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </div>
             <div className="space-y-2">
               <Label>Department</Label>
-              <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={newDeptId} onChange={(e) => setNewDeptId(e.target.value)}>
-                <option value="">Select department</option>
-                {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
+              <Input value={myDeptName || ""} readOnly disabled className="bg-muted text-muted-foreground cursor-not-allowed" />
             </div>
             <div className="space-y-2"><Label>Experience (years)</Label><Input type="number" placeholder="0" value={newExperience} onChange={(e) => setNewExperience(e.target.value)} /></div>
             <div className="space-y-2"><Label>Exam Score (%)</Label><Input type="number" placeholder="0-100" value={newExamScore} onChange={(e) => setNewExamScore(e.target.value)} /></div>
           </div>
-          <Button variant="hero" className="mt-4" onClick={handleAddNurse} disabled={saving}>
-            {saving && <Loader2 size={16} className="mr-1 animate-spin" />}
-            Save Nurse
-          </Button>
+          <div className="mt-4 flex gap-2">
+            <Button variant="hero" onClick={handleAddNurse} disabled={saving}>
+              {saving && <Loader2 size={16} className="mr-1 animate-spin" />}
+              Save Nurse
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowAdd(false);
+                setNewName(""); setNewPhone(""); setNewAge(""); setNewGender("");
+                setNewDivisionId(""); setNewExperience(""); setNewExamScore("");
+              }}
+              disabled={saving}
+            >
+              Cancel
+            </Button>
+          </div>
         </div>
       )}
 
@@ -768,7 +1012,7 @@ const HNManageView = () => {
             <thead>
               <tr className="border-b bg-muted/50">
                 <th className="px-4 py-3 text-left font-semibold text-foreground">Name</th>
-                <th className="px-4 py-3 text-left font-semibold text-foreground">Division</th>
+                <th className="px-4 py-3 text-left font-semibold text-foreground">Acuity Level</th>
                 <th className="px-4 py-3 text-left font-semibold text-foreground">Department</th>
                 <th className="px-4 py-3 text-left font-semibold text-foreground">Phone</th>
                 <th className="px-4 py-3 text-left font-semibold text-foreground">Exp</th>
@@ -779,7 +1023,21 @@ const HNManageView = () => {
               {filtered.map((n) => (
                 <tr key={n.id} className="hover:bg-muted/30">
                   <td className="px-4 py-3 font-medium text-foreground">{n.name}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{n.divisions?.name || "—"}</td>
+                  <td className="px-4 py-3">
+                    <select
+                      value={n.division_id || ""}
+                      onChange={(e) => handleAssignAcuity(n.id, e.target.value)}
+                      disabled={assigningAcuity[n.id]}
+                      className={`h-8 rounded-md border border-input bg-background px-2 text-xs font-medium ${
+                        n.divisions?.name ? (ACUITY_COLORS[n.divisions.name] || "") : "text-muted-foreground"
+                      }`}
+                    >
+                      <option value="">No Acuity</option>
+                      {acuityLevels.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground">{n.departments?.name || "—"}</td>
                   <td className="px-4 py-3 text-muted-foreground">{n.phone}</td>
                   <td className="px-4 py-3 text-muted-foreground">{n.experience_years || 0} yrs</td>

@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import {
   ActivityLog,
   Admin,
@@ -38,7 +39,7 @@ const modelMap = {
 
 const populateMap = {
   nurses: [
-    { path: "division_id", select: "name", model: "Division" },
+    { path: "division_id", select: "name acuity_level", model: "Division" },
     { path: "current_department_id", select: "name", model: "Department" },
   ],
   head_nurses: [{ path: "department_id", select: "name", model: "Department" }],
@@ -56,19 +57,41 @@ const populateMap = {
 
 function castId(v) {
   if (typeof v !== "string") return v;
-  return v;
+  // Convert string ID to MongoDB ObjectId
+  try {
+    return new mongoose.Types.ObjectId(v);
+  } catch (e) {
+    return v;
+  }
 }
 
 function buildQuery(filters = []) {
   const query = {};
   for (const f of filters) {
-    if (f.op === "eq") query[f.field] = castId(f.value);
-    if (f.op === "neq") query[f.field] = { $ne: castId(f.value) };
-    if (f.op === "gte") query[f.field] = { $gte: castId(f.value) };
-    if (f.op === "in") query[f.field] = { $in: (f.value || []).map(castId) };
-    if (f.op === "not" && f.operator === "is" && f.value === null) query[f.field] = { $ne: null };
+    // Map 'id' to '_id' for MongoDB
+    const field = f.field === "id" ? "_id" : f.field;
+    if (f.op === "eq") query[field] = castId(f.value);
+    if (f.op === "neq") query[field] = { $ne: castId(f.value) };
+    if (f.op === "gte") query[field] = { $gte: castId(f.value) };
+    if (f.op === "in") query[field] = { $in: (f.value || []).map(castId) };
+    if (f.op === "not" && f.operator === "is" && f.value === null) query[field] = { $ne: null };
   }
   return query;
+}
+
+function normalizePayload(payload) {
+  // Convert all fields ending with _id to MongoDB ObjectIds
+  const normalized = { ...payload };
+  for (const key in normalized) {
+    if ((key.endsWith("_id") || key === "id") && typeof normalized[key] === "string") {
+      try {
+        normalized[key] = new mongoose.Types.ObjectId(normalized[key]);
+      } catch (e) {
+        // If conversion fails, leave as is
+      }
+    }
+  }
+  return normalized;
 }
 
 function shapeRow(table, row) {
@@ -85,7 +108,22 @@ function shapeRow(table, row) {
   }
 
   if (table === "nurses") {
-    base.divisions = row.division_id ? { name: row.division_id.name } : null;
+    // division_id may be a populated object or a plain ObjectId — always normalise to a string
+    if (row.division_id && typeof row.division_id === "object" && row.division_id._id) {
+      base.divisions = {
+        id: row.division_id._id.toString(),
+        name: row.division_id.name,
+        acuity_level: row.division_id.acuity_level ?? null,
+      };
+      base.division_id = row.division_id._id.toString();
+    } else if (row.division_id) {
+      // Plain ObjectId (not populated)
+      base.divisions = null;
+      base.division_id = row.division_id.toString();
+    } else {
+      base.divisions = null;
+      base.division_id = null;
+    }
     base.departments = row.current_department_id ? { name: row.current_department_id.name } : null;
   }
   if (table === "head_nurses") {
@@ -161,7 +199,8 @@ router.post("/query", requireAuth, async (req, res) => {
     }
 
     if (action === "update") {
-      await Model.updateMany(mongoQuery, { $set: payload });
+      const normalizedPayload = normalizePayload(payload);
+      await Model.updateMany(mongoQuery, { $set: normalizedPayload });
       
       // Fetch the updated documents to return
       let q = Model.find(mongoQuery);
