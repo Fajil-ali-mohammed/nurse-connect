@@ -588,9 +588,22 @@ const HNPerformanceView = () => {
     if (!selectedNurse || !user) return;
     setSaving(true);
     
+    if (attendance === "" || quality === "" || reliability === "") {
+      toast({ title: "Validation Error", description: "Please fill in all score fields.", variant: "destructive" });
+      setSaving(false);
+      return;
+    }
+
     const att = Number(attendance);
     const qual = Number(quality);
     const rel = Number(reliability);
+
+    if (att < 0 || att > 100 || qual < 0 || qual > 100 || rel < 0 || rel > 100) {
+      toast({ title: "Validation Error", description: "Scores must be between 0 and 100.", variant: "destructive" });
+      setSaving(false);
+      return;
+    }
+
     const overall = Math.round((att + qual + rel) / 3);
 
     const payload = {
