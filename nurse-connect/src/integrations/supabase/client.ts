@@ -323,8 +323,8 @@ export const supabase = {
           try {
             const token = getStoredToken();
             const form = new FormData();
-            form.append("file", file);
             form.append("path", path);
+            form.append("file", file);
             const res = await fetch(`${API_BASE}/storage/${bucket}/upload`, {
               method: "POST",
               headers: token ? { Authorization: `Bearer ${token}` } : {},

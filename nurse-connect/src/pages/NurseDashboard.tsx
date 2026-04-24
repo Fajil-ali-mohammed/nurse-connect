@@ -48,6 +48,7 @@ interface NurseProfile {
   previous_departments: string[] | null;
   divisions: { name: string } | null;
   departments: { name: string } | null;
+  photo_url?: string;
 }
 
 const NurseDashboard = () => {
@@ -100,7 +101,7 @@ const NurseDashboard = () => {
     const fetchProfile = async () => {
       const { data } = await supabase
         .from("nurses")
-        .select("id, name, phone, age, gender, division_id, current_department_id, experience_years, exam_score_percentage, previous_departments, divisions:divisions(name), departments:departments(name)")
+        .select("id, name, phone, age, gender, division_id, current_department_id, experience_years, exam_score_percentage, previous_departments, photo_url, divisions:divisions(name), departments:departments(name)")
         .eq("user_id", user.id)
         .maybeSingle();
       setNurseProfile(data as unknown as NurseProfile | null);
@@ -223,9 +224,14 @@ const NurseDashboard = () => {
           <div className="relative" onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => setProfileMenuOpen(!profileMenuOpen)}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary hover:bg-primary/20 transition-colors"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary hover:bg-primary/20 transition-colors overflow-hidden"
             >
-              {initials}
+              <Avatar className="h-full w-full">
+                {nurseProfile?.photo_url ? (
+                  <AvatarImage src={nurseProfile.photo_url} alt={nurseProfile.name} className="object-cover" />
+                ) : null}
+                <AvatarFallback className="bg-transparent text-sm font-bold">{initials}</AvatarFallback>
+              </Avatar>
             </button>
 
             {profileMenuOpen && (

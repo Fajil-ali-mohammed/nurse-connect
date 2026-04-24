@@ -11,10 +11,11 @@ import { toast } from "@/hooks/use-toast";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Calendar, Users, ArrowLeftRight, ClipboardCheck, UserPlus, LogOut,
-  Menu, X, Check, XCircle, Search, Star, Trash2, Loader2, Wand2, User, Edit3
+  Menu, X, Check, XCircle, Search, Star, Trash2, Loader2, Wand2, User, Edit3, ChevronDown
 } from "lucide-react";
 import logo from "@/assets/logo.svg";
 
@@ -35,7 +36,7 @@ const HeadNurseDashboard = () => {
   const { signOut, user } = useAuth();
   const navigate = useNavigate();
 
-  const [hnProfile, setHnProfile] = useState<{ name: string; department_name: string | null } | null>(null);
+  const [hnProfile, setHnProfile] = useState<{ name: string; department_name: string | null; photo_url: string | null } | null>(null);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -51,13 +52,14 @@ const HeadNurseDashboard = () => {
     const fetchProfile = async () => {
       const { data } = await supabase
         .from("head_nurses")
-        .select("name, departments:departments(name)")
+        .select("name, photo_url, departments:departments(name)")
         .eq("user_id", user.id)
         .maybeSingle();
       if (data) {
         setHnProfile({
           name: data.name,
           department_name: (data.departments as any)?.name ?? null,
+          photo_url: data.photo_url || null,
         });
       }
     };
@@ -121,9 +123,14 @@ const HeadNurseDashboard = () => {
           <div className="relative" onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => setProfileMenuOpen(!profileMenuOpen)}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary hover:bg-primary/20 transition-colors"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary hover:bg-primary/20 transition-colors overflow-hidden"
             >
-              {initials}
+              <Avatar className="h-full w-full">
+                {hnProfile?.photo_url ? (
+                  <AvatarImage src={hnProfile.photo_url} alt={hnProfile.name} className="object-cover" />
+                ) : null}
+                <AvatarFallback className="bg-transparent text-sm font-bold">{initials}</AvatarFallback>
+              </Avatar>
             </button>
 
             {profileMenuOpen && (
@@ -224,6 +231,7 @@ const HNScheduleView = () => {
   const [generating, setGenerating] = useState(false);
   const [fallbackDialog, setFallbackDialog] = useState({ open: false, message: "", prompt: "" });
   const [departmentId, setDepartmentId] = useState<string | null>(null);
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
 
   const now = new Date();
   const [selectedWeek, setSelectedWeek] = useState(getISOWeek(now));
@@ -334,6 +342,27 @@ const HNScheduleView = () => {
     return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   };
 
+  const toggleDay = (dateStr: string) => {
+    const newExpanded = new Set(expandedDays);
+    if (newExpanded.has(dateStr)) {
+      newExpanded.delete(dateStr);
+    } else {
+      newExpanded.add(dateStr);
+    }
+    setExpandedDays(newExpanded);
+  };
+
+  const groupByDate = (data: ScheduleRow[]) => {
+    const grouped: { [key: string]: ScheduleRow[] } = {};
+    data.forEach((item) => {
+      if (!grouped[item.duty_date]) {
+        grouped[item.duty_date] = [];
+      }
+      grouped[item.duty_date].push(item);
+    });
+    return Object.entries(grouped).sort(([dateA], [dateB]) => dateA.localeCompare(dateB));
+  };
+
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -386,45 +415,59 @@ const HNScheduleView = () => {
           <p className="mt-1 text-xs text-muted-foreground">Click "Auto-Generate" to create a fair schedule automatically.</p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl bg-card shadow-card">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-4 py-3 text-left font-semibold text-foreground">Nurse</th>
-                <th className="px-4 py-3 text-left font-semibold text-foreground">Department</th>
-                <th className="px-4 py-3 text-left font-semibold text-foreground">Shift</th>
-                <th className="px-4 py-3 text-left font-semibold text-foreground">Date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {filtered.map((s) => (
-                <tr key={s.id} className="hover:bg-muted/30">
-                  <td className="px-4 py-3 font-medium text-foreground">{s.nurse?.name || "Unknown"}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{s.department?.name || "Unknown"}</td>
-                  <td className="px-4 py-3">
-                    <Badge
-                      className={
-                        s.shift_type === "day"
-                          ? "bg-amber-100 text-amber-700 border-0"
-                          : s.shift_type === "night"
-                          ? "bg-indigo-100 text-indigo-700 border-0"
-                          : s.shift_type === "morning"
-                          ? "bg-primary/10 text-primary border-0"
-                          : s.shift_type === "evening"
-                          ? "bg-accent/20 text-accent border-0"
-                          : "bg-muted text-foreground border-0"
-                      }
-                    >
-                      {SHIFT_LABELS[s.shift_type] || s.shift_type}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{formatDate(s.duty_date)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="border-t px-4 py-3 text-xs text-muted-foreground">
-            {filtered.length} entries â€¢ {new Set(filtered.map((s) => s.nurse?.id)).size} nurses
+        <div className="space-y-3 rounded-xl bg-card shadow-card overflow-hidden">
+          {groupByDate(filtered).map(([dateStr, dayShifts]) => (
+            <div key={dateStr} className="border-b last:border-b-0">
+              <button
+                onClick={() => toggleDay(dateStr)}
+                className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/30 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <ChevronDown
+                    size={18}
+                    className={`text-primary transition-transform ${expandedDays.has(dateStr) ? "rotate-180" : ""}`}
+                  />
+                  <div className="text-left">
+                    <p className="font-semibold text-foreground">{formatDate(dateStr)}</p>
+                    <p className="text-xs text-muted-foreground">{dayShifts.length} shift{dayShifts.length !== 1 ? "s" : ""}</p>
+                  </div>
+                </div>
+                <Badge variant="secondary" className="ml-auto">
+                  {dayShifts.length}
+                </Badge>
+              </button>
+
+              {expandedDays.has(dateStr) && (
+                <div className="border-t bg-muted/10 divide-y">
+                  {dayShifts.map((s) => (
+                    <div key={s.id} className="px-4 py-3 flex items-center justify-between hover:bg-muted/20 transition-colors">
+                      <div className="flex-1">
+                        <p className="font-medium text-foreground text-sm">{s.nurse?.name || "Unknown"}</p>
+                        <p className="text-xs text-muted-foreground">{s.department?.name || "Unknown"}</p>
+                      </div>
+                      <Badge
+                        className={
+                          s.shift_type === "day"
+                            ? "bg-amber-100 text-amber-700 border-0"
+                            : s.shift_type === "night"
+                            ? "bg-indigo-100 text-indigo-700 border-0"
+                            : s.shift_type === "morning"
+                            ? "bg-primary/10 text-primary border-0"
+                            : s.shift_type === "evening"
+                            ? "bg-accent/20 text-accent border-0"
+                            : "bg-muted text-foreground border-0"
+                        }
+                      >
+                        {SHIFT_LABELS[s.shift_type] || s.shift_type}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          <div className="border-t px-4 py-3 text-xs text-muted-foreground bg-muted/10">
+            {filtered.length} entries • {new Set(filtered.map((s) => s.nurse?.id)).size} nurses
           </div>
         </div>
       )}

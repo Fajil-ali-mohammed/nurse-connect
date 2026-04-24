@@ -9,8 +9,9 @@ import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
 import {
   LayoutDashboard, Users, UserPlus, Calendar, ArrowLeftRight, Activity, LogOut,
-  Menu, X, Loader2, Search, Wand2, Check, XCircle, Plus, Shield, User, Edit3
+  Menu, X, Loader2, Search, Wand2, Check, XCircle, Plus, Shield, User, Edit3, ChevronDown
 } from "lucide-react";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import logo from "@/assets/logo.svg";
 
@@ -45,8 +46,31 @@ const AdminDashboard = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
   const navigate = useNavigate();
+  const [adminProfile, setAdminProfile] = useState<{ name: string; photo_url: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    const fetchProfile = async () => {
+      const { data } = await supabase
+        .from("admins")
+        .select("name, photo_url")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (data) {
+        setAdminProfile({
+          name: data.name,
+          photo_url: data.photo_url || null,
+        });
+      }
+    };
+    fetchProfile();
+  }, [user]);
+
+  const initials = adminProfile?.name
+    ? adminProfile.name.split(" ").map((w) => w[0]).join("").toUpperCase()
+    : "AD";
 
   const handleSignOut = async () => { await signOut(); navigate("/"); };
 
@@ -105,16 +129,21 @@ const AdminDashboard = () => {
           <div className="relative" onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => setProfileMenuOpen(!profileMenuOpen)}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary hover:bg-primary/20 transition-colors"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary hover:bg-primary/20 transition-colors overflow-hidden"
             >
-              AD
+              <Avatar className="h-full w-full">
+                {adminProfile?.photo_url ? (
+                  <AvatarImage src={adminProfile.photo_url} alt={adminProfile.name} className="object-cover" />
+                ) : null}
+                <AvatarFallback className="bg-transparent text-sm font-bold">{initials}</AvatarFallback>
+              </Avatar>
             </button>
 
             {profileMenuOpen && (
               <div className="absolute right-0 mt-2 w-56 rounded-lg border border-border bg-card shadow-lg z-50">
                 {/* Profile Info */}
                 <div className="border-b px-4 py-3">
-                  <p className="text-sm font-semibold text-foreground">Administrator</p>
+                  <p className="text-sm font-semibold text-foreground">{adminProfile?.name || "Administrator"}</p>
                   <p className="text-xs text-muted-foreground">Super Admin</p>
                 </div>
 
@@ -672,7 +701,7 @@ const AdminSchedules = () => {
           <p className="text-xs text-muted-foreground">Try a different week, year, or filter.</p>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
           {deptNames.map((deptName) => {
             const deptRows = grouped[deptName];
             const isOpen   = expandedDepts.has(deptName);
@@ -692,48 +721,53 @@ const AdminSchedules = () => {
             }, {} as Record<string, number>);
 
             return (
-              <div key={deptName} className="rounded-xl bg-card shadow-card overflow-hidden border border-border/60">
+              <div key={deptName} className="rounded-lg bg-card shadow-card border border-border/40 overflow-hidden hover:shadow-lg transition-shadow">
                 {/* Department header */}
                 <button
                   onClick={() => toggleDept(deptName)}
-                  className="w-full flex items-center justify-between px-5 py-4 hover:bg-muted/40 transition-colors text-left"
+                  className="w-full flex items-center justify-between px-5 py-4 hover:bg-primary/5 transition-colors text-left"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-                      <Calendar size={16} className="text-primary" />
+                  <div className="flex items-start gap-3 flex-1">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
+                      <Calendar size={18} className="text-primary" />
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-foreground">{deptName}</p>
-                      <p className="text-xs text-muted-foreground">{deptRows.length} shifts Â· {deptNurseCount} nurses</p>
+                      <p className="text-base font-bold text-foreground">{deptName}</p>
+                      <p className="text-xs text-muted-foreground mt-1">{deptRows.length} shifts • {deptNurseCount} nurses</p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    {Object.entries(deptShiftCounts).map(([shift, count]) => {
-                      const c = SHIFT_COLORS[shift] || SHIFT_COLORS.night;
-                      return (
-                        <span
-                          key={shift}
-                          className={`hidden sm:inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium ${c.bg} ${c.text}`}
-                        >
-                          <span className={`h-1.5 w-1.5 rounded-full ${c.dot}`} />
-                          {shift.charAt(0).toUpperCase() + shift.slice(1)} Ã—{count as number}
-                        </span>
-                      );
-                    })}
-                    <span className={`text-muted-foreground transition-transform duration-200 inline-block ${isOpen ? "rotate-180" : ""}`}>
-                      â–¾
-                    </span>
+                  <div className="flex items-center gap-2 ml-2">
+                    <ChevronDown
+                      size={18}
+                      className={`text-muted-foreground transition-transform flex-shrink-0 ${isOpen ? "rotate-180" : ""}`}
+                    />
                   </div>
                 </button>
 
-                {/* Expanded rows */}
+                {/* Shift badges row */}
+                <div className="px-5 py-3 bg-muted/20 border-t border-border/30 flex flex-wrap gap-2">
+                  {Object.entries(deptShiftCounts).map(([shift, count]) => {
+                    const c = SHIFT_COLORS[shift] || SHIFT_COLORS.night;
+                    return (
+                      <span
+                        key={shift}
+                        className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold ${c.bg} ${c.text}`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${c.dot}`} />
+                        {shift === "day" ? "Day" : shift === "night" ? "Night" : shift === "morning" ? "Morning" : "Evening"} {String.fromCharCode(0x2500)}{count}
+                      </span>
+                    );
+                  })}
+                </div>
+
+                {/* Expanded details */}
                 {isOpen && (
-                  <div className="border-t border-border/60">
+                  <div className="border-t border-border/30 max-h-96 overflow-y-auto">
                     {sortedDates.map((date) => {
                       const dayRows  = byDate[date];
                       const dayLabel = new Date(date + "T00:00:00").toLocaleDateString("en-US", {
-                        weekday: "long", month: "short", day: "numeric",
+                        weekday: "short", month: "short", day: "numeric",
                       });
                       const shiftOrder: Record<string, number> = { day: 0, night: 1, morning: 2, evening: 3 };
                       const sortedRows = [...dayRows].sort(
@@ -741,26 +775,36 @@ const AdminSchedules = () => {
                       );
 
                       return (
-                        <div key={date}>
-                          <div className="flex items-center gap-2 bg-muted/30 px-5 py-2 border-b border-border/40">
-                            <span className="text-xs font-semibold text-foreground">{dayLabel}</span>
-                            <span className="text-xs text-muted-foreground">Â· {dayRows.length} {dayRows.length === 1 ? "shift" : "shifts"}</span>
+                        <div key={date} className="border-b border-border/20 last:border-b-0">
+                          <div className="sticky top-0 z-10 flex items-center justify-between bg-secondary/40 backdrop-blur-sm px-5 py-3 border-y border-border/40">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-background shadow-sm border border-border/50">
+                                <Calendar size={16} className="text-primary" />
+                              </div>
+                              <span className="text-sm font-bold text-foreground">{dayLabel}</span>
+                            </div>
+                            <Badge variant="outline" className="text-xs font-medium bg-background shadow-sm">
+                              {dayRows.length} {dayRows.length === 1 ? 'shift' : 'shifts'}
+                            </Badge>
                           </div>
-                          <div className="divide-y divide-border/30">
+                          <div className="divide-y divide-border/10 bg-background/50">
                             {sortedRows.map((s) => {
                               const c = SHIFT_COLORS[s.shift_type] || SHIFT_COLORS.night;
                               return (
                                 <div
                                   key={s.id}
-                                  className="flex items-center justify-between px-5 py-3 hover:bg-muted/20 transition-colors"
+                                  className="flex items-center justify-between px-5 py-3 hover:bg-muted/30 transition-colors"
                                 >
                                   <div className="flex items-center gap-3">
-                                    <div className={`h-2 w-2 rounded-full flex-shrink-0 ${c.dot}`} />
-                                    <span className="text-sm font-medium text-foreground">
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted/50 border border-border/50">
+                                      <User size={14} className="text-muted-foreground" />
+                                    </div>
+                                    <span className="text-sm font-semibold text-foreground">
                                       {s.nurse?.name || "Unknown"}
                                     </span>
                                   </div>
-                                  <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium ${c.bg} ${c.text}`}>
+                                  <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-bold ${c.bg} ${c.text} shadow-sm`}>
+                                    <span className={`mr-1.5 h-2 w-2 rounded-full ${c.dot}`} />
                                     {SHIFT_LABELS[s.shift_type] || s.shift_type}
                                   </span>
                                 </div>

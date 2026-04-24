@@ -11,6 +11,7 @@ const headNurseSchema = new mongoose.Schema(
     department_id: { type: mongoose.Schema.Types.ObjectId, ref: "Department", default: null },
     exam_score_percentage: { type: Number, default: null },
     experience_years: { type: Number, default: 0 },
+    photo_url: { type: String, default: null },
   },
   { timestamps: { createdAt: "created_at", updatedAt: "updated_at" } }
 );
