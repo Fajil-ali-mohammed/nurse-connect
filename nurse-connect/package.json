@@ -8,7 +8,7 @@
     "backend:install": "npm --prefix backend install",
     "backend:dev": "npm --prefix backend run dev",
     "backend:start": "npm --prefix backend run start",
-    "build": "vite build",
+    "build": "npm install --prefix backend && vite build",
     "build:dev": "vite build --mode development",
     "start": "npm --prefix backend start",
     "lint": "eslint .",

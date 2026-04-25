@@ -119,6 +119,15 @@ async function connectMongo() {
 }
 
 async function bootstrap() {
+  if (!process.env.JWT_SECRET) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("JWT_SECRET is not set in backend/.env. This is REQUIRED for production auth.");
+    } else {
+      console.warn("\x1b[33m%s\x1b[0m", "⚠️  WARNING: JWT_SECRET is not set. Using 'dev-secret-key' for local development.");
+      process.env.JWT_SECRET = "dev-secret-key";
+    }
+  }
+
   await connectMongo();
 
   const server = app.listen(port, () => {

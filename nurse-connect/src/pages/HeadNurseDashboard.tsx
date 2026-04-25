@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
@@ -465,6 +465,9 @@ const HNScheduleView = () => {
               <Wand2 className="h-5 w-5 text-primary" />
               Schedule Generation
             </DialogTitle>
+            <DialogDescription>
+              Adjust settings and finalize the duty roster for your department.
+            </DialogDescription>
           </DialogHeader>
           <div className="py-4 space-y-4">
             <p className="text-sm text-foreground/80">{fallbackDialog.message}</p>
@@ -779,6 +782,9 @@ const HNPerformanceView = () => {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Evaluate {selectedNurse?.name}</DialogTitle>
+            <DialogDescription>
+              Record attendance, quality, and reliability metrics for this nurse.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
