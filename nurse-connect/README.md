@@ -1,73 +1,87 @@
-# Welcome to your Lovable project
+# Nurse Connect 🏥
 
-## Project info
+Nurse Connect is a premium, high-fidelity staff management and scheduling platform designed specifically for modern healthcare environments like **Caritas Hospital**. It streamlines the complex workflows of nurse scheduling, shift swaps, and departmental oversight through a beautiful, intuitive interface.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## 🌟 Key Features
 
-## How can I edit this code?
+### 👨‍💼 Role-Based Dashboards
+*   **Administrator**: Complete oversight of all staff, departments, and system-wide schedules.
+*   **Head Nurse**: Manage specific departmental teams, approve/reject shift swap requests, and generate automated schedules.
+*   **Nurse**: View personal schedules, request shift swaps with eligible peers, and manage professional profiles.
 
-There are several ways of editing your application.
+### 📅 Smart Scheduling & Acuity
+*   **Acuity-Based Logic**: Schedules are generated considering the Acuity (Division) of nurses to ensure balanced skill distribution across shifts.
+*   **Departmental Grouping**: Automated organization of staff by department for clearer administrative visibility.
 
-**Use Lovable**
+### 🔄 Intelligent Shift Swaps
+*   **Peer-to-Peer Requests**: Nurses can request swaps directly with eligible colleagues (same department and acuity).
+*   **Approval Workflow**: Seamless transition from nurse acceptance to Head Nurse final approval.
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+### 🔔 Robust Notification System
+*   **Real-time Alerts**: Instant notifications for schedule publications and swap status updates.
+*   **Duty Reminders**: Smart reminders triggered at exactly 12 hours, 3 hours, and at the start of a shift.
+*   **Interactive Inbox**: Directly navigate to relevant actions from the notification center.
 
-Changes made via Lovable will be committed automatically to this repo.
+---
 
-**Use your preferred IDE**
+## 🚀 Getting Started
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### Prerequisites
+*   [Node.js](https://nodejs.org/) (v18 or higher)
+*   [MongoDB](https://www.mongodb.com/) (Local or Atlas instance)
+*   [Supabase Account](https://supabase.com/) (For Authentication and Storage)
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### ⚙️ Environment Configuration
 
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+Create a `.env` file in the **root** directory:
+```env
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+VITE_API_BASE_URL=http://localhost:4000/api
 ```
 
-**Edit a file directly in GitHub**
+Create a `.env` file in the **backend** directory:
+```env
+MONGODB_URI_DIRECT=your_mongodb_connection_string
+PORT=4000
+JWT_SECRET=your_secret_key
+SUPABASE_URL=your_supabase_url
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_key
+```
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### 🛠️ Installation & Running
 
-**Use GitHub Codespaces**
+1.  **Clone the repository**
+    ```sh
+    git clone https://github.com/MathewJoseph2005/nurse-connect.git
+    cd nurse-connect
+    ```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+2.  **Install Dependencies**
+    ```sh
+    npm install
+    npm run backend:install
+    ```
 
-## What technologies are used for this project?
+3.  **Start Development Servers**
+    *   **Frontend**: `npm run dev` (Runs on http://localhost:8080)
+    *   **Backend**: `npm run backend:dev` (Runs on http://localhost:4000)
 
-This project is built with:
+---
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## 🛠️ Technology Stack
 
-## How can I deploy this project?
+*   **Frontend**: React, TypeScript, Vite, Tailwind CSS, Shadcn UI, Lucide Icons.
+*   **Backend**: Node.js, Express, Mongoose.
+*   **Database**: MongoDB (Primary Data), Supabase (Auth, Storage & Data Shim).
+*   **State Management**: React Query (TanStack Query).
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+## 📂 Project Structure
 
-## Can I connect a custom domain to my Lovable project?
+*   `src/`: React frontend source code, including components, pages, and hooks.
+*   `backend/`: Node.js Express server, Mongoose models, and business logic.
+*   `supabase/`: Database migrations and configuration.
 
-Yes, you can!
+---
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+Designed with ❤️ for **Caritas Hospital**.
