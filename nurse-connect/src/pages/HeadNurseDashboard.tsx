@@ -273,7 +273,7 @@ const HNScheduleView = () => {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
       const response = await fetch(`${apiBase}/functions/generate-schedule`, {
         method: "POST",
@@ -517,7 +517,7 @@ const HNSwapView = () => {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
       const res = await fetch(`${apiBase}/functions/handle-swap`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -911,7 +911,7 @@ const HNManageView = () => {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
       const res = await fetch(`${apiBase}/functions/nurses/${nurseId}/acuity`, {
         method: "PATCH",
@@ -950,7 +950,7 @@ const HNManageView = () => {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
     const userId = sessionData.session?.user?.id;
-    const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+    const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
     // Use direct fetch so update actually hits the DB (shim update() has a known silent-fail bug)
     const updateRes = await fetch(`${apiBase}/functions/nurses/${nurse.id}/deactivate`, {

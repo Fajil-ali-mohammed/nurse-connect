@@ -334,7 +334,7 @@ const AdminHeadNurses = () => {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
       const email = `${form.username.toLowerCase().replace(/\s/g, "")}@headnurse.local`;
       const res = await fetch(`${apiBase}/functions/create-user`, {
         method: "POST",
@@ -979,7 +979,7 @@ const AdminSwaps = () => {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
       const res = await fetch(`${apiBase}/functions/handle-swap`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -1123,7 +1123,7 @@ const AdminAdmins = () => {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
       const email = `${form.username.toLowerCase().replace(/\s/g, "")}@admin.local`;
       const res = await fetch(`${apiBase}/functions/create-user`, {
         method: "POST",

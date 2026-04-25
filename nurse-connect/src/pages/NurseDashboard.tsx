@@ -521,7 +521,7 @@ const SwapView = ({
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
       const res = await fetch(`${apiBase}/functions/swaps/nurse-request`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -555,7 +555,7 @@ const SwapView = ({
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
       const res = await fetch(`${apiBase}/functions/swaps/nurse-respond`, {
         method: "POST",

@@ -10,12 +10,36 @@ import dbRoutes from "./routes/db.js";
 import functionRoutes from "./routes/functions.js";
 import storageRoutes from "./routes/storage.js";
 import notificationRoutes from "./routes/notifications.js";
+import helmet from "helmet";
+import morgan from "morgan";
+import compression from "compression";
+import rateLimit from "express-rate-limit";
 import { startReminderScheduler } from "./lib/reminderScheduler.js";
 
 const app = express();
 const port = process.env.PORT || 4000;
+const isProd = process.env.NODE_ENV === "production";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Security & Optimization Middleware
+app.use(helmet({
+  contentSecurityPolicy: false, // Disabled for simplicity in multi-service setups
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+app.use(morgan(isProd ? "combined" : "dev"));
+app.use(compression());
+
+// Rate Limiting (Production Only)
+if (isProd) {
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1000, // Limit each IP to 1000 requests per window
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use("/api/", limiter);
+}
 
 app.use(
   cors({
@@ -122,3 +146,19 @@ bootstrap().catch((error) => {
   console.error("Failed to start backend", error);
   process.exit(1);
 });
+
+// Graceful Shutdown
+const shutdown = async (signal) => {
+  console.log(`\n${signal} received. Closing resources...`);
+  try {
+    await mongoose.disconnect();
+    console.log("MongoDB disconnected.");
+    process.exit(0);
+  } catch (err) {
+    console.error("Error during shutdown:", err);
+    process.exit(1);
+  }
+};
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

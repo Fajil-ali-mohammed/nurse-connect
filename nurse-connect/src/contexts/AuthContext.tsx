@@ -32,7 +32,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const fetchRole = async (token: string) => {
     try {
-      const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
       const res = await fetch(`${API_BASE}/auth/me`, {
         headers: {
           "Authorization": `Bearer ${token}`,
