@@ -828,6 +828,8 @@ const HNManageView = () => {
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [assigningAcuity, setAssigningAcuity] = useState<Record<string, boolean>>({});
+  const [nurseToRemove, setNurseToRemove] = useState<any>(null);
+  const [removingNurse, setRemovingNurse] = useState(false);
 
   // The head nurse's own department (resolved once on mount)
   const [myDeptId, setMyDeptId] = useState<string | null>(null);
@@ -881,22 +883,59 @@ const HNManageView = () => {
   }, [user, fetchData]);
 
   const handleAddNurse = async () => {
-    if (!newName || !newPhone) {
-      toast({ title: "Missing fields", description: "Name and phone are required", variant: "destructive" });
+    // 1. Basic presence validation
+    if (!newName.trim() || !newPhone.trim()) {
+      toast({ title: "Validation Error", description: "Name and phone number are required.", variant: "destructive" });
       return;
     }
+
+    // 2. Phone validation (Assuming 10 digits)
+    const phoneDigits = newPhone.replace(/\D/g, "");
+    if (phoneDigits.length < 10) {
+      toast({ title: "Invalid Phone", description: "Please enter a valid 10-digit phone number.", variant: "destructive" });
+      return;
+    }
+
+    // 3. Age validation
+    if (newAge) {
+      const ageVal = parseInt(newAge);
+      if (isNaN(ageVal) || ageVal < 18 || ageVal > 75) {
+        toast({ title: "Invalid Age", description: "Age must be between 18 and 75.", variant: "destructive" });
+        return;
+      }
+    }
+
+    // 4. Experience validation
+    if (newExperience) {
+      const expVal = parseInt(newExperience);
+      if (isNaN(expVal) || expVal < 0 || expVal > 50) {
+        toast({ title: "Invalid Experience", description: "Experience must be between 0 and 50 years.", variant: "destructive" });
+        return;
+      }
+    }
+
+    // 5. Exam Score validation
+    if (newExamScore) {
+      const scoreVal = parseFloat(newExamScore);
+      if (isNaN(scoreVal) || scoreVal < 0 || scoreVal > 100) {
+        toast({ title: "Invalid Score", description: "Exam score must be between 0 and 100%.", variant: "destructive" });
+        return;
+      }
+    }
+
     if (!myDeptId) {
-      toast({ title: "No department", description: "You have no department assigned yet.", variant: "destructive" });
+      toast({ title: "Configuration Error", description: "You have no department assigned yet.", variant: "destructive" });
       return;
     }
+
     setSaving(true);
     const { error } = await supabase.from("nurses").insert({
-      name: newName,
-      phone: newPhone,
+      name: newName.trim(),
+      phone: phoneDigits,
       age: newAge ? parseInt(newAge) : null,
       gender: newGender as any || null,
       division_id: newDivisionId || null,
-      current_department_id: myDeptId,          // <- always assigned to HN's own dept
+      current_department_id: myDeptId,
       experience_years: newExperience ? parseInt(newExperience) : 0,
       exam_score_percentage: newExamScore ? parseFloat(newExamScore) : null,
     });
@@ -948,45 +987,36 @@ const HNManageView = () => {
   };
 
 
-  const handleRemove = async (nurse: any) => {
-    // Optimistically remove from UI so the row disappears immediately.
-    const previousNurses = nurses;
-    setNurses((prev) => prev.filter((n) => n.id !== nurse.id));
+  const handleRemove = async () => {
+    if (!nurseToRemove) return;
+    setRemovingNurse(true);
 
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
-    const userId = sessionData.session?.user?.id;
     const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
-    // Use direct fetch so update actually hits the DB (shim update() has a known silent-fail bug)
-    const updateRes = await fetch(`${apiBase}/functions/nurses/${nurse.id}/deactivate`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    });
+    try {
+      const updateRes = await fetch(`${apiBase}/functions/nurses/${nurseToRemove.id}/deactivate`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
 
-    if (!updateRes.ok) {
-      setNurses(previousNurses);
-      const errJson = await updateRes.json().catch(() => ({}));
-      toast({ title: "Error", description: errJson.error || "Failed to deactivate nurse", variant: "destructive" });
-      return;
+      if (!updateRes.ok) {
+        const errJson = await updateRes.json().catch(() => ({}));
+        throw new Error(errJson.error || "Failed to remove nurse");
+      }
+
+      toast({ title: "Nurse Removed", description: `${nurseToRemove.name} has been permanently removed from the database.` });
+      setNurseToRemove(null);
+      if (myDeptId) fetchData(myDeptId);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setRemovingNurse(false);
     }
-
-    const { error: removalError } = await supabase.from("nurse_removals").insert({
-      nurse_id: nurse.id,
-      nurse_name: nurse.name,
-      reason: "Removed by Head Nurse",
-      removed_by: userId!,
-    });
-
-    if (removalError) {
-      toast({ title: "Warning", description: "Nurse was removed but removal log could not be saved.", variant: "destructive" });
-    }
-
-    toast({ title: "Nurse Removed", description: `${nurse.name} has been deactivated.` });
-    if (myDeptId) fetchData(myDeptId);
   };
 
   const filtered = nurses.filter((n) => {
@@ -1117,7 +1147,7 @@ const HNManageView = () => {
                   <td className="px-4 py-3 text-muted-foreground">{n.phone}</td>
                   <td className="px-4 py-3 text-muted-foreground">{n.experience_years || 0} yrs</td>
                   <td className="px-4 py-3">
-                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleRemove(n)}>
+                    <Button variant="ghost" size="sm" className="text-destructive hover:bg-destructive/10" onClick={() => setNurseToRemove(n)}>
                       <Trash2 size={14} />
                     </Button>
                   </td>
@@ -1130,6 +1160,31 @@ const HNManageView = () => {
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!nurseToRemove} onOpenChange={(open) => !open && setNurseToRemove(null)}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <XCircle className="h-5 w-5" />
+              Remove Nurse
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to remove <span className="font-bold text-foreground">{nurseToRemove?.name}</span>? 
+              This action is <span className="font-bold text-destructive underline">permanent</span> and will delete the nurse and their account from the database.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-2 sm:justify-end mt-4">
+            <Button variant="outline" onClick={() => setNurseToRemove(null)} disabled={removingNurse}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleRemove} disabled={removingNurse}>
+              {removingNurse ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Trash2 size={16} className="mr-2" />}
+              Permanently Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

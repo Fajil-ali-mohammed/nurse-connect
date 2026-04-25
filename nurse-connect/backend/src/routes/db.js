@@ -212,6 +212,20 @@ router.post("/query", requireAuth, async (req, res) => {
     if (action === "insert") {
       const docs = Array.isArray(payload) ? payload : [payload];
       const created = await Model.insertMany(docs);
+
+      // Log if it's a nurse insertion
+      if (table === "nurses") {
+        for (const doc of created) {
+          await ActivityLog.create({
+            action: "NURSE_ADDED",
+            description: `Nurse ${doc.name} was added by ${req.authUser.name}`,
+            user_id: req.authUser.id,
+            entity_type: "nurse",
+            entity_id: doc._id
+          });
+        }
+      }
+
       return res.json({ data: created.map((d) => ({ ...d.toObject(), id: d._id.toString() })) });
     }
 

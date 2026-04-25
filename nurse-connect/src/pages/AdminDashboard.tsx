@@ -9,8 +9,11 @@ import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
 import {
   LayoutDashboard, Users, UserPlus, Calendar, ArrowLeftRight, Activity, LogOut,
-  Menu, X, Loader2, Search, Wand2, Check, XCircle, Plus, Shield, User, Edit3, ChevronDown
+  Menu, X, Loader2, Search, Wand2, Check, XCircle, Plus, Shield, User, Edit3, ChevronDown, Trash2
 } from "lucide-react";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+} from "@/components/ui/dialog";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import logo from "@/assets/logo.svg";
@@ -517,39 +520,65 @@ const AdminNurses = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
+  const [nurseToRemove, setNurseToRemove] = useState<any>(null);
+  const [removingNurse, setRemovingNurse] = useState(false);
 
-  useEffect(() => {
-    const fetch = async () => {
-      const [nursesRes, headNursesRes] = await Promise.all([
-        supabase
-          .from("nurses")
-          .select("id, name, phone, is_active, divisions:divisions(name), departments:departments(name)")
-          .order("name"),
-        supabase
-          .from("head_nurses")
-          .select("id, name, username, departments:departments(name), divisions:divisions(name)")
-          .order("name")
-      ]);
+  const fetchData = async () => {
+    setLoading(true);
+    const [nursesRes, headNursesRes] = await Promise.all([
+      supabase
+        .from("nurses")
+        .select("id, name, phone, is_active, divisions:divisions(name), departments:departments(name)")
+        .order("name"),
+      supabase
+        .from("head_nurses")
+        .select("id, name, username, departments:departments(name), divisions:divisions(name)")
+        .order("name")
+    ]);
 
-      const nursesData = (nursesRes.data || []).map(n => ({ ...n, role: 'nurse' }));
-      const headNursesData = (headNursesRes.data || []).map(hn => ({
-        id: hn.id,
-        name: hn.name,
-        phone: hn.username,
-        is_active: true,
-        divisions: hn.divisions,
-        departments: hn.departments,
-        role: 'head_nurse'
-      }));
+    const nursesData = (nursesRes.data || []).map(n => ({ ...n, role: 'nurse' }));
+    const headNursesData = (headNursesRes.data || []).map(hn => ({
+      id: hn.id,
+      name: hn.name,
+      phone: hn.username,
+      is_active: true,
+      divisions: hn.divisions,
+      departments: hn.departments,
+      role: 'head_nurse'
+    }));
 
-      const combined = [...headNursesData, ...nursesData].sort((a, b) => a.name.localeCompare(b.name));
-      
-      setNurses(combined);
-      setExpandedDepts(new Set(combined.map((r: any) => r.departments?.name || "Unassigned")));
-      setLoading(false);
-    };
-    fetch();
-  }, []);
+    const combined = [...headNursesData, ...nursesData].sort((a, b) => a.name.localeCompare(b.name));
+    
+    setNurses(combined);
+    setExpandedDepts(new Set(combined.map((r: any) => r.departments?.name || "Unassigned")));
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchData(); }, []);
+
+  const handleRemove = async () => {
+    if (!nurseToRemove) return;
+    setRemovingNurse(true);
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
+
+    try {
+      const res = await fetch(`${apiBase}/functions/nurses/${nurseToRemove.id}/deactivate`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error("Failed to remove nurse");
+      toast({ title: "Nurse removed", description: `${nurseToRemove.name} has been permanently deleted.` });
+      setNurseToRemove(null);
+      await fetchData();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setRemovingNurse(false);
+    }
+  };
 
   if (loading) return <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
 
@@ -622,6 +651,7 @@ const AdminNurses = () => {
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Division</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Phone</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Status</th>
+                        <th className="px-4 py-3 text-left font-semibold text-foreground">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/50">
@@ -640,6 +670,18 @@ const AdminNurses = () => {
                               {n.is_active ? "Active" : "Inactive"}
                             </Badge>
                           </td>
+                          <td className="px-4 py-3">
+                            {n.role === 'nurse' && n.is_active && (
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className="text-destructive hover:bg-destructive/10 h-8 w-8 p-0" 
+                                onClick={() => setNurseToRemove(n)}
+                              >
+                                <Trash2 size={14} />
+                              </Button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -650,6 +692,31 @@ const AdminNurses = () => {
           ))}
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!nurseToRemove} onOpenChange={(open) => !open && setNurseToRemove(null)}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <XCircle className="h-5 w-5" />
+              Remove Nurse
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to remove <span className="font-bold text-foreground">{nurseToRemove?.name}</span>? 
+              This action is <span className="font-bold text-destructive underline">permanent</span> and will delete the nurse and their account from the database.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-2 sm:justify-end mt-4">
+            <Button variant="outline" onClick={() => setNurseToRemove(null)} disabled={removingNurse}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleRemove} disabled={removingNurse}>
+              {removingNurse ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Trash2 size={16} className="mr-2" />}
+              Permanently Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
@@ -962,8 +1029,8 @@ const AdminSwaps = () => {
         .from("shift_swap_requests")
         .select(`
           id, status, created_at,
-          requester:nurses!shift_swap_requests_requester_nurse_id_fkey(name),
-          target:nurses!shift_swap_requests_target_nurse_id_fkey(name),
+          requester:nurses!shift_swap_requests_requester_nurse_id_fkey(name, divisions:divisions(name)),
+          target:nurses!shift_swap_requests_target_nurse_id_fkey(name, divisions:divisions(name)),
           requester_schedule:schedules!shift_swap_requests_requester_schedule_id_fkey(duty_date, shift_type, department:departments(name)),
           target_schedule:schedules!shift_swap_requests_target_schedule_id_fkey(duty_date, shift_type, department:departments(name))
         `)
@@ -1008,12 +1075,27 @@ const AdminSwaps = () => {
         <div className="space-y-3">
           {swaps.map((s) => (
             <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-card p-4 shadow-card">
-              <div>
-                <p className="text-sm font-medium text-foreground">{s.requester?.name || "?"} {" <-> "} {s.target?.name || "?"}</p>
-                <p className="text-xs text-muted-foreground">
-                  {s.requester_schedule?.shift_type} - {s.requester_schedule?.department?.name} {" -> "} {s.target_schedule?.shift_type} - {s.target_schedule?.department?.name}
-                  {" • "}{formatTimeAgo(s.created_at)}
-                </p>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-bold text-foreground">{s.requester?.name || "?"}</p>
+                  <ArrowLeftRight size={12} className="text-muted-foreground" />
+                  <p className="text-sm font-bold text-foreground">{s.target?.name || "?"}</p>
+                </div>
+                <div className="mt-1 space-y-1">
+                  <div className="flex items-center gap-2 text-xs">
+                    <Badge variant="outline" className="text-[10px] h-4 px-1">{s.requester?.divisions?.name || "No Acuity"}</Badge>
+                    <span className="text-muted-foreground">
+                      {s.requester_schedule?.duty_date} ({s.requester_schedule?.shift_type}) - {s.requester_schedule?.department?.name}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <Badge variant="outline" className="text-[10px] h-4 px-1">{s.target?.divisions?.name || "No Acuity"}</Badge>
+                    <span className="text-muted-foreground">
+                      {s.target_schedule?.duty_date} ({s.target_schedule?.shift_type}) - {s.target_schedule?.department?.name}
+                    </span>
+                  </div>
+                </div>
+                <p className="mt-2 text-[10px] text-muted-foreground italic">Requested {formatTimeAgo(s.created_at)}</p>
               </div>
               <div className="flex items-center gap-2">
                 {s.status === "pending_admin" || s.status === "pending" ? (

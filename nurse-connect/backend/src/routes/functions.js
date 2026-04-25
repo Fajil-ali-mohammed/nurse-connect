@@ -13,6 +13,7 @@ import {
   ShiftSwapRequest,
   User,
   UserRole,
+  NurseRemoval,
 } from "../models/index.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { createBalancedScheduleEntries, generateScheduleWithGroq } from "../lib/scheduling.js";
@@ -670,15 +671,40 @@ router.patch("/nurses/:id/acuity", requireAuth, async (req, res) => {
 // PATCH /functions/nurses/:id/deactivate
 router.patch("/nurses/:id/deactivate", requireAuth, async (req, res) => {
   try {
-    const nurse = await Nurse.findByIdAndUpdate(
-      req.params.id,
-      { $set: { is_active: false } },
-      { new: true }
-    ).lean();
+    const { id } = req.params;
+    const nurse = await Nurse.findById(id);
     if (!nurse) return res.status(404).json({ error: "Nurse not found" });
-    return res.json({ success: true, id: nurse._id.toString() });
+
+    // If there's a linked user, delete them too
+    if (nurse.user_id) {
+      await User.findByIdAndDelete(nurse.user_id);
+      await UserRole.deleteMany({ user_id: nurse.user_id });
+    }
+
+    // Delete the nurse
+    const nurseName = nurse.name;
+    await Nurse.findByIdAndDelete(id);
+
+    // Log the activity in central logs
+    await ActivityLog.create({
+      action: "NURSE_REMOVED",
+      description: `Nurse ${nurseName} was completely removed from the database by ${req.authUser.name}`,
+      user_id: req.authUser.id,
+      entity_type: "nurse",
+      entity_id: id
+    });
+
+    // Also record in specialized nurse_removals collection
+    await NurseRemoval.create({
+      nurse_id: new mongoose.Types.ObjectId(), // Use new ID since old one is deleted
+      nurse_name: nurseName,
+      removed_by: req.authUser.id,
+      reason: `Permanently removed by ${req.authUser.role}`
+    });
+
+    return res.json({ success: true, id });
   } catch (error) {
-    return res.status(500).json({ error: error.message || "Failed to deactivate nurse" });
+    return res.status(500).json({ error: error.message || "Failed to remove nurse" });
   }
 });
 
