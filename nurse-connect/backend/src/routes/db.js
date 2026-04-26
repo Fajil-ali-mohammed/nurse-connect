@@ -5,6 +5,7 @@ import {
   Admin,
   Department,
   Division,
+  Ward,
   HeadNurse,
   Nurse,
   NurseLeave,
@@ -24,6 +25,7 @@ const modelMap = {
   user_roles: UserRole,
   divisions: Division,
   departments: Department,
+  wards: Ward,
   nurses: Nurse,
   head_nurses: HeadNurse,
   admins: Admin,
@@ -41,14 +43,18 @@ const populateMap = {
   nurses: [
     { path: "division_id", select: "name acuity_level", model: "Division" },
     { path: "current_department_id", select: "name", model: "Department" },
+    { path: "current_ward_id", select: "name", model: "Ward" },
   ],
   head_nurses: [
     { path: "department_id", select: "name", model: "Department" },
-    { path: "division_id", select: "name acuity_level", model: "Division" }
+    { path: "division_id", select: "name acuity_level", model: "Division" },
+    { path: "ward_id", select: "name", model: "Ward" }
   ],
+  
   schedules: [
     { path: "nurse_id", select: "name division_id", model: "Nurse" },
     { path: "department_id", select: "name", model: "Department" },
+    { path: "ward_id", select: "name", model: "Ward" },
   ],
   shift_swap_requests: [
     { path: "requester_nurse_id", select: "name", model: "Nurse" },
@@ -128,6 +134,7 @@ function shapeRow(table, row) {
       base.division_id = null;
     }
     base.departments = row.current_department_id ? { name: row.current_department_id.name } : null;
+    base.wards = row.current_ward_id ? { name: row.current_ward_id.name } : null;
   }
   if (table === "head_nurses") {
     if (row.division_id && typeof row.division_id === "object" && row.division_id._id) {
@@ -145,6 +152,7 @@ function shapeRow(table, row) {
       base.division_id = null;
     }
     base.departments = row.department_id ? { name: row.department_id.name } : null;
+    base.wards = row.ward_id ? { name: row.ward_id.name } : null;
   }
   if (table === "schedules") {
     base.nurse = row.nurse_id
@@ -155,6 +163,7 @@ function shapeRow(table, row) {
         }
       : null;
     base.department = row.department_id ? { id: row.department_id._id?.toString?.() || row.department_id.id, name: row.department_id.name } : null;
+    base.ward = row.ward_id ? { id: row.ward_id._id?.toString?.() || row.ward_id.id, name: row.ward_id.name } : null;
   }
   if (table === "shift_swap_requests") {
     base.requester = row.requester_nurse_id ? { name: row.requester_nurse_id.name } : null;

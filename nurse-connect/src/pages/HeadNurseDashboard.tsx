@@ -2,7 +2,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +14,8 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Calendar, Users, ArrowLeftRight, ClipboardCheck, UserPlus, LogOut,
-  Menu, X, Check, XCircle, Search, Star, Trash2, Loader2, Wand2, User, Edit3, ChevronDown
+  Menu, X, Check, XCircle, Search, Star, Trash2, Loader2, Wand2, User, Edit3, ChevronDown,
+  Settings2, Zap
 } from "lucide-react";
 import logo from "@/assets/logo.svg";
 
@@ -33,7 +33,7 @@ const HeadNurseDashboard = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("schedule");
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const { signOut, user } = useAuth();
+  const { signOut, user, session } = useAuth();
   const navigate = useNavigate();
 
   const [hnProfile, setHnProfile] = useState<{ name: string; department_name: string | null; photo_url: string | null } | null>(null);
@@ -50,21 +50,38 @@ const HeadNurseDashboard = () => {
   useEffect(() => {
     if (!user) return;
     const fetchProfile = async () => {
-      const { data } = await supabase
-        .from("head_nurses")
-        .select("name, photo_url, departments:departments(name)")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (data) {
-        setHnProfile({
-          name: data.name,
-          department_name: (data.departments as any)?.name ?? null,
-          photo_url: data.photo_url || null,
+      try {
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+        const token = (session as any)?.access_token;
+        const res = await fetch(`${API_BASE}/db/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            table: "head_nurses",
+            action: "select",
+            filters: [{ field: "user_id", op: "eq", value: user.id }],
+            options: { maybeSingle: true },
+          }),
         });
+        if (!res.ok) {
+          console.error("Failed to fetch head nurse profile");
+          return;
+        }
+        const json = await res.json();
+        const row = json.data;
+        if (row) {
+          setHnProfile({
+            name: row.name,
+            department_name: row.departments?.name ?? null,
+            photo_url: row.photo_url || null,
+          });
+        }
+      } catch (err) {
+        console.error("Error fetching head nurse profile", err);
       }
     };
     fetchProfile();
-  }, [user]);
+  }, [user, session]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -77,6 +94,7 @@ const HeadNurseDashboard = () => {
 
   const tabs = [
     { key: "schedule" as const, icon: Calendar, label: "Weekly Schedule" },
+    { key: "swaps" as const, icon: ArrowLeftRight, label: "Swap Requests" },
     { key: "performance" as const, icon: ClipboardCheck, label: "Performance" },
     { key: "manage" as const, icon: UserPlus, label: "Manage Nurses" },
   ];
@@ -174,6 +192,7 @@ const HeadNurseDashboard = () => {
           )}
 
           {activeTab === "schedule" && <HNScheduleView />}
+          {activeTab === "swaps" && <HNSwapView />}
           {activeTab === "performance" && <HNPerformanceView />}
           {activeTab === "manage" && <HNManageView />}
         </div>
@@ -209,14 +228,22 @@ const SHIFT_LABELS: Record<string, string> = {
 };
 
 const HNScheduleView = () => {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [search, setSearch] = useState("");
   const [scheduleData, setScheduleData] = useState<ScheduleRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [fallbackDialog, setFallbackDialog] = useState({ open: false, message: "", prompt: "" });
+  const [overwriteDialog, setOverwriteDialog] = useState({ open: false, message: "", prompt: "" });
   const [departmentId, setDepartmentId] = useState<string | null>(null);
+  const [wardId, setWardId] = useState<string | null>(null);
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
+  const [availableNurses, setAvailableNurses] = useState<any[]>([]);
+  const [editingSchedule, setEditingSchedule] = useState<ScheduleRow | null>(null);
+  const [selectedNurseId, setSelectedNurseId] = useState<string>("");
+  const [selectedShiftType, setSelectedShiftType] = useState<string>("");
+  const [editingLoading, setEditingLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const now = new Date();
   const [selectedWeek, setSelectedWeek] = useState(getISOWeek(now));
@@ -226,51 +253,153 @@ const HNScheduleView = () => {
   const [shiftPattern, setShiftPattern] = useState("12_hours");
   const [maxHoursPerWeek, setMaxHoursPerWeek] = useState(36);
 
-  // Fetch head nurse's department
+  // Acuity requirements
+  const [divisions, setDivisions] = useState<any[]>([]);
+  const [acuityTargets, setAcuityTargets] = useState<Record<string, number>>({});
+  const [showAcuityPanel, setShowAcuityPanel] = useState(false);
+
+  // Fetch head nurse's department from backend
   useEffect(() => {
     if (!user) return;
     const fetchDepartment = async () => {
-      const { data } = await supabase
-        .from("head_nurses")
-        .select("department_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (data?.department_id) {
-        setDepartmentId(data.department_id);
+      try {
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+        const token = (session as any)?.access_token;
+        const res = await fetch(`${API_BASE}/db/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            table: "head_nurses",
+            action: "select",
+            filters: [{ field: "user_id", op: "eq", value: user.id }],
+            options: { maybeSingle: true },
+          }),
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (json.data?.department_id) setDepartmentId(json.data.department_id);
+        if (json.data?.ward_id) setWardId(json.data.ward_id);
+      } catch (err) {
+        console.error("Error fetching head nurse department", err);
       }
     };
     fetchDepartment();
-  }, [user]);
+  }, [user, session]);
+
+  // Fetch divisions
+  useEffect(() => {
+    const fetchDivisions = async () => {
+      try {
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+        const token = (session as any)?.access_token;
+        const res = await fetch(`${API_BASE}/db/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ table: "divisions", action: "select" }),
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        setDivisions(json.data || []);
+      } catch (err) {
+        console.error("Error fetching divisions", err);
+      }
+    };
+    fetchDivisions();
+  }, [session]);
+
+  const fetchAvailableNurses = useCallback(async () => {
+    if (!departmentId) return;
+    try {
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+      const token = (session as any)?.access_token;
+      const res = await fetch(`${API_BASE}/db/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          table: "nurses",
+          action: "select",
+          filters: [
+            { field: "current_department_id", op: "eq", value: departmentId },
+            { field: "is_active", op: "eq", value: true },
+          ],
+          orders: [{ field: "name", ascending: true }],
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to fetch nurses");
+      const json = await res.json();
+      setAvailableNurses(json.data || []);
+    } catch (err) {
+      console.error("Error fetching available nurses", err);
+    }
+  }, [departmentId, session]);
 
   const fetchSchedule = useCallback(async () => {
     if (!departmentId) return;
     setLoading(true);
-    const { data, error } = await supabase
-      .from("schedules")
-      .select("id, duty_date, shift_type, nurse:nurses(id, name, division_id), department:departments(id, name)")
-      .eq("week_number", selectedWeek)
-      .eq("year", selectedYear)
-      .eq("department_id", departmentId)
-      .order("duty_date")
-      .order("shift_type");
-
-    if (error) {
-      console.error("Error fetching schedules:", error);
-    } else {
-      setScheduleData((data as unknown as ScheduleRow[]) || []);
+    try {
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+      const token = (session as any)?.access_token;
+      const res = await fetch(`${API_BASE}/db/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          table: "schedules",
+          action: "select",
+          filters: [
+            { field: "week_number", op: "eq", value: selectedWeek },
+            { field: "year", op: "eq", value: selectedYear },
+            { field: "department_id", op: "eq", value: departmentId },
+          ],
+          orders: [
+            { field: "duty_date", ascending: true },
+            { field: "shift_type", ascending: true },
+          ],
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to fetch schedules");
+      const json = await res.json();
+      setScheduleData((json.data as ScheduleRow[]) || []);
+    } catch (err) {
+      console.error("Error fetching schedules:", err);
     }
     setLoading(false);
-  }, [selectedWeek, selectedYear, departmentId]);
+  }, [selectedWeek, selectedYear, departmentId, session]);
 
   useEffect(() => {
     fetchSchedule();
-  }, [fetchSchedule]);
+    fetchAvailableNurses();
+  }, [fetchSchedule, fetchAvailableNurses]);
 
-  const handleGenerate = async (forceAssignRemaining = false) => {
+  const handleGenerate = async (forceAssignRemaining = false, confirmOverwrite = false) => {
+    // Validate date constraints for head nurses
+    const now = new Date();
+    const currentWeek = getISOWeek(now);
+    const currentYear = now.getFullYear();
+    
+    // Simple week distance calculation
+    const weekDiff = (selectedYear - currentYear) * 52 + (selectedWeek - currentWeek);
+
+    if (weekDiff < 0) {
+      toast({ 
+        title: "Invalid Week", 
+        description: "Cannot generate schedules for past weeks.", 
+        variant: "destructive" 
+      });
+      return;
+    }
+
+    if (weekDiff > 3) {
+      toast({ 
+        title: "Invalid Week", 
+        description: "You can only generate schedules up to 4 weeks in advance (current week + 3 future weeks).", 
+        variant: "destructive" 
+      });
+      return;
+    }
+
     setGenerating(true);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
+      const token = (session as any)?.access_token;
       const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
       const response = await fetch(`${apiBase}/functions/generate-schedule`, {
@@ -285,13 +414,20 @@ const HNScheduleView = () => {
           force_assign_remaining: forceAssignRemaining,
           shift_pattern: shiftPattern,
           max_shifts_per_week: Math.round(maxHoursPerWeek / (shiftPattern === "12_hours" ? 12 : 8)),
+          confirm_overwrite: confirmOverwrite,
+          acuity_requirements: acuityTargets,
         }),
       });
       
       const result = await response.json();
 
       if (!response.ok) {
-        if (result?.code === "INSUFFICIENT_NURSES" && result?.can_force_generate && !forceAssignRemaining) {
+        if (response.status === 409 && result?.code === "SCHEDULE_ALREADY_EXISTS") {
+          setOverwriteDialog({ open: true, message: result.error, prompt: result.prompt });
+          setGenerating(false);
+          return;
+        }
+        if ((result?.code === "INSUFFICIENT_NURSES" || result?.code === "INSUFFICIENT_ACUITY_RESOURCES") && result?.can_force_generate && !forceAssignRemaining) {
           setFallbackDialog({ open: true, message: result.error, prompt: result.prompt });
           setGenerating(false);
           return;
@@ -312,6 +448,59 @@ const HNScheduleView = () => {
       toast({ title: "Cannot Auto-Generate", description: error.message, variant: "destructive" });
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleEditSchedule = async () => {
+    if (!editingSchedule || !selectedNurseId || !selectedShiftType) {
+      toast({ title: "Error", description: "Please select a nurse and shift", variant: "destructive" });
+      return;
+    }
+
+    setEditingLoading(true);
+    try {
+      const token = (session as any)?.access_token;
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
+      const res = await fetch(`${apiBase}/functions/schedules/${editingSchedule.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ nurse_id: selectedNurseId, shift_type: selectedShiftType }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to update schedule");
+      }
+      toast({ title: "Schedule Updated", description: "The schedule entry has been updated." });
+      setEditingSchedule(null);
+      setSelectedNurseId("");
+      setSelectedShiftType("");
+      await fetchSchedule();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || String(err), variant: "destructive" });
+    } finally {
+      setEditingLoading(false);
+    }
+  };
+
+  const handleDeleteSchedule = async (scheduleId: string) => {
+    setDeletingId(scheduleId);
+    try {
+      const token = (session as any)?.access_token;
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
+      const res = await fetch(`${apiBase}/functions/schedules/${scheduleId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to delete schedule");
+      }
+      toast({ title: "Schedule Removed", description: "The nurse has been removed from this shift." });
+      await fetchSchedule();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || String(err), variant: "destructive" });
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -351,13 +540,20 @@ const HNScheduleView = () => {
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-bold text-foreground">Weekly Schedule</h2>
+        <div>
+          <h2 className="text-lg font-bold text-foreground">Weekly Schedule</h2>
+          {selectedYear < now.getFullYear() || selectedYear > now.getFullYear() + 1 ? (
+            <p className="text-xs text-destructive mt-0.5">⚠️ You can only view or generate schedules for {now.getFullYear()} or {now.getFullYear() + 1}</p>
+          ) : !departmentId && !loading ? (
+            <p className="text-xs text-destructive mt-0.5">⚠️ Head Nurse profile not loaded. Department data is missing.</p>
+          ) : null}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1">
             <Label className="text-xs text-muted-foreground">Week:</Label>
             <Input type="number" min={1} max={53} value={selectedWeek} onChange={(e) => setSelectedWeek(Number(e.target.value))} className="w-16 h-9" />
             <Label className="text-xs text-muted-foreground ml-1">Year:</Label>
-            <Input type="number" min={2024} max={2030} value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="w-20 h-9" />
+            <Input type="number" min={now.getFullYear()} max={now.getFullYear() + 1} value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className="w-20 h-9" />
           </div>
           <div className="flex items-center gap-1">
             <Label className="text-xs text-muted-foreground">Pattern:</Label>
@@ -382,12 +578,51 @@ const HNScheduleView = () => {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input placeholder="Search..." className="pl-10 w-32 h-9" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            className={showAcuityPanel ? "bg-primary/10 text-primary border-primary/20" : ""}
+            onClick={() => setShowAcuityPanel(!showAcuityPanel)}
+          >
+            <Settings2 size={16} className="mr-1" />
+            Acuity Targets
+          </Button>
           <Button variant="pink" size="sm" onClick={() => handleGenerate(false)} disabled={generating}>
             {generating ? <Loader2 size={16} className="mr-1 animate-spin" /> : <Wand2 size={16} className="mr-1" />}
             {generating ? "Generating..." : "Auto-Generate"}
           </Button>
         </div>
       </div>
+
+      {showAcuityPanel && (
+        <div className="bg-muted/30 rounded-xl p-4 border border-border animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <Zap size={16} className="text-amber-500" />
+              Staffing Targets per Shift
+            </h3>
+            <p className="text-xs text-muted-foreground">Specify how many nurses of each acuity level you need per shift.</p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {divisions.sort((a, b) => (a.acuity_level || 0) - (b.acuity_level || 0)).map((div) => (
+              <div key={div._id} className="space-y-1.5">
+                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {div.name}
+                </Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={acuityTargets[div._id] || ""}
+                  placeholder="0"
+                  onChange={(e) => setAcuityTargets({ ...acuityTargets, [div._id]: parseInt(e.target.value) || 0 })}
+                  className="h-8 text-sm"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-20">
@@ -445,6 +680,29 @@ const HNScheduleView = () => {
                       >
                         {SHIFT_LABELS[s.shift_type] || s.shift_type}
                       </Badge>
+                      <div className="ml-4 flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-muted-foreground hover:text-primary"
+                          onClick={() => {
+                            setEditingSchedule(s);
+                            setSelectedNurseId(s.nurse?.id || "");
+                            setSelectedShiftType(s.shift_type);
+                          }}
+                        >
+                          <Edit3 size={14} />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => handleDeleteSchedule(s.id)}
+                          disabled={deletingId === s.id}
+                        >
+                          {deletingId === s.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -456,6 +714,8 @@ const HNScheduleView = () => {
           </div>
         </div>
       )}
+
+      {/* Fallback Dialog for Auto-Generate */}
       <Dialog open={fallbackDialog.open} onOpenChange={(open) => !open && setFallbackDialog({ open: false, message: "", prompt: "" })}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
@@ -484,6 +744,81 @@ const HNScheduleView = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Overwrite Confirmation Dialog */}
+      <Dialog open={overwriteDialog.open} onOpenChange={(open) => !open && setOverwriteDialog({ open: false, message: "", prompt: "" })}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Calendar className="h-5 w-5 text-primary" />
+              Schedule Already Exists
+            </DialogTitle>
+            <DialogDescription>
+              {overwriteDialog.message}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <p className="text-sm font-medium text-foreground">{overwriteDialog.prompt}</p>
+          </div>
+          <DialogFooter className="flex gap-2 sm:justify-end">
+            <Button variant="outline" onClick={() => setOverwriteDialog({ open: false, message: "", prompt: "" })}>
+              Cancel
+            </Button>
+            <Button variant="pink" onClick={() => {
+              setOverwriteDialog({ open: false, message: "", prompt: "" });
+              handleGenerate(false, true);
+            }}>
+              Yes, Overwrite
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Shift Dialog */}
+      <Dialog open={!!editingSchedule} onOpenChange={(open) => !open && setEditingSchedule(null)}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Edit Shift</DialogTitle>
+            <DialogDescription>
+              Change the assigned nurse or shift type for this duty.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label>Nurse</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={selectedNurseId}
+                onChange={(e) => setSelectedNurseId(e.target.value)}
+              >
+                <option value="">Select a nurse</option>
+                {availableNurses.map((n) => (
+                  <option key={n.id} value={n.id}>{n.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label>Shift Type</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={selectedShiftType}
+                onChange={(e) => setSelectedShiftType(e.target.value)}
+              >
+                <option value="day">Day Shift (6AM - 6PM)</option>
+                <option value="night">Night Shift (6PM - 6AM)</option>
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingSchedule(null)}>Cancel</Button>
+            <Button onClick={handleEditSchedule} disabled={editingLoading}>
+              {editingLoading && <Loader2 size={16} className="mr-2 animate-spin" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 };
@@ -493,31 +828,37 @@ const HNScheduleView = () => {
 const HNSwapView = () => {
   const [swaps, setSwaps] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const { session } = useAuth();
 
   useEffect(() => {
     const fetchSwaps = async () => {
-      const { data, error } = await supabase
-        .from("shift_swap_requests")
-        .select(`
-          id, status, created_at, review_notes,
-          requester:nurses!shift_swap_requests_requester_nurse_id_fkey(name),
-          target:nurses!shift_swap_requests_target_nurse_id_fkey(name),
-          requester_schedule:schedules!shift_swap_requests_requester_schedule_id_fkey(duty_date, shift_type, department:departments(name)),
-          target_schedule:schedules!shift_swap_requests_target_schedule_id_fkey(duty_date, shift_type, department:departments(name))
-        `)
-        .in("status", ["pending_admin", "pending"])
-        .order("created_at", { ascending: false });
-
-      if (!error) setSwaps(data || []);
+      try {
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+        const token = (session as any)?.access_token;
+        const res = await fetch(`${API_BASE}/db/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            table: "shift_swap_requests",
+            action: "select",
+            filters: [{ field: "status", op: "in", value: ["pending_admin", "pending"] }],
+            orders: [{ field: "created_at", ascending: false }],
+          }),
+        });
+        if (!res.ok) throw new Error("Failed to fetch swaps");
+        const json = await res.json();
+        setSwaps(json.data || []);
+      } catch (err) {
+        console.error("Error fetching swaps", err);
+      }
       setLoading(false);
     };
     fetchSwaps();
-  }, []);
+  }, [session]);
 
   const handleAction = async (id: string, status: "approved" | "rejected") => {
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
+      const token = (session as any)?.access_token;
       const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
       const res = await fetch(`${apiBase}/functions/handle-swap`, {
         method: "POST",
@@ -581,7 +922,7 @@ const HNSwapView = () => {
 // --- Performance View -------------------------------------------
 
 const HNPerformanceView = () => {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [nurses, setNurses] = useState<any[]>([]);
   const [evaluations, setEvaluations] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
@@ -597,48 +938,64 @@ const HNPerformanceView = () => {
   useEffect(() => {
     if (!user) return;
     const fetchData = async () => {
-      // 1. Get head nurse dept
-      const { data: hn } = await supabase
-        .from("head_nurses")
-        .select("department_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      try {
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+        const token = (session as any)?.access_token;
 
-      const deptId = hn?.department_id;
-      if (!deptId) {
-        setLoading(false);
-        return;
-      }
+        // 1. Get head nurse dept
+        const hnRes = await fetch(`${API_BASE}/db/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ table: "head_nurses", action: "select", filters: [{ field: "user_id", op: "eq", value: user.id }], options: { maybeSingle: true } }),
+        });
+        if (!hnRes.ok) {
+          setLoading(false);
+          return;
+        }
+        const hnJson = await hnRes.json();
+        const deptId = hnJson.data?.department_id;
+        if (!deptId) {
+          setLoading(false);
+          return;
+        }
 
-      // 2. Fetch scoped nurses and evals
-      const [nursesRes, evalsRes] = await Promise.all([
-        supabase
-          .from("nurses")
-          .select("id, name, photo_url, division_id, current_department_id, experience_years, divisions:divisions(name), departments:departments(name)")
-          .eq("is_active", true)
-          .eq("current_department_id", deptId),
-        supabase
-          .from("performance_evaluations")
-          .select("nurse_id, overall_score, attendance_score, quality_score, reliability_score, evaluation_period, remarks")
-          .order("created_at", { ascending: false }),
-      ]);
+        // 2. Fetch scoped nurses and evals
+        const [nursesRes, evalsRes] = await Promise.all([
+          fetch(`${API_BASE}/db/query`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ table: "nurses", action: "select", filters: [{ field: "is_active", op: "eq", value: true }, { field: "current_department_id", op: "eq", value: deptId }], options: { }, }),
+          }),
+          fetch(`${API_BASE}/db/query`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ table: "performance_evaluations", action: "select", orders: [{ field: "created_at", ascending: false }] }),
+          }),
+        ]);
 
-      if (!nursesRes.error) setNurses(nursesRes.data || []);
+        const nursesJson = await nursesRes.json();
+        const evalsJson = await evalsRes.json();
 
-      // Group evaluations by nurse_id, keep latest
-      const evalMap: Record<string, any> = {};
-      if (!evalsRes.error && evalsRes.data) {
-        for (const ev of evalsRes.data) {
-          if (!evalMap[ev.nurse_id]) {
-            evalMap[ev.nurse_id] = ev;
+        if (nursesRes.ok) setNurses(nursesJson.data || []);
+
+        // Group evaluations by nurse_id, keep latest
+        const evalMap: Record<string, any> = {};
+        if (evalsRes.ok && evalsJson.data) {
+          for (const ev of evalsJson.data) {
+            if (!evalMap[ev.nurse_id]) {
+              evalMap[ev.nurse_id] = ev;
+            }
           }
         }
+        setEvaluations(evalMap);
+        setLoading(false);
+      } catch (err) {
+        console.error("Error fetching performance data", err);
+        setLoading(false);
       }
-      setEvaluations(evalMap);
-      setLoading(false);
     };
     fetchData();
-  }, [user]);
+  }, [user, session]);
 
   const handleOpenEvaluation = (nurse: any) => {
     setSelectedNurse(nurse);
@@ -683,9 +1040,17 @@ const HNPerformanceView = () => {
     };
 
     try {
-      const { error } = await supabase.from("performance_evaluations").insert(payload);
-      if (error) throw error;
-      
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+      const token = (session as any)?.access_token;
+      const res = await fetch(`${API_BASE}/db/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ table: "performance_evaluations", action: "insert", payload }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to save evaluation");
+      }
       toast({ title: "Evaluation Saved", description: `Updated performance for ${selectedNurse.name}` });
       setEvaluations(prev => ({ ...prev, [selectedNurse.id]: payload }));
       setSelectedNurse(null);
@@ -818,7 +1183,7 @@ const HNPerformanceView = () => {
 // --- Manage Nurses View -----------------------------------------
 
 const HNManageView = () => {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [showAdd, setShowAdd] = useState(false);
   const [nurses, setNurses] = useState<any[]>([]);
   const [acuityLevels, setAcuityLevels] = useState<any[]>([]);
@@ -843,42 +1208,68 @@ const HNManageView = () => {
 
   // Step 1 - resolve HN's department, then step 2 - fetch scoped nurses
   const fetchData = useCallback(async (deptId: string) => {
-    const [nursesRes, divsRes] = await Promise.all([
-      supabase
-        .from("nurses")
-        .select("id, name, phone, age, gender, experience_years, exam_score_percentage, division_id, current_department_id, is_active, divisions:divisions(id, name, acuity_level), departments:departments(name)")
-        .eq("is_active", true)
-        .eq("current_department_id", deptId),   // <- scoped to THIS department only
-      supabase.from("divisions").select("id, name, acuity_level").order("acuity_level"),
-    ]);
-    setNurses(nursesRes.data || []);
-    setAcuityLevels(divsRes.data || []);
-    setLoading(false);
-  }, []);
+    try {
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+      const token = (session as any)?.access_token;
+
+      const [nursesRes, divsRes] = await Promise.all([
+        fetch(`${API_BASE}/db/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ table: "nurses", action: "select", filters: [{ field: "is_active", op: "eq", value: true }, { field: "current_department_id", op: "eq", value: deptId }], options: {} }),
+        }),
+        fetch(`${API_BASE}/db/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ table: "divisions", action: "select", orders: [{ field: "acuity_level", ascending: true }] }),
+        }),
+      ]);
+
+      const nursesJson = await nursesRes.json();
+      const divsJson = await divsRes.json();
+
+      if (nursesRes.ok) setNurses(nursesJson.data || []);
+      if (divsRes.ok) setAcuityLevels(divsJson.data || []);
+      setLoading(false);
+    } catch (err) {
+      console.error("Error fetching manage view data", err);
+      setLoading(false);
+    }
+  }, [session]);
 
   useEffect(() => {
     if (!user) return;
     const init = async () => {
-      // Resolve the head nurse's department
-      const { data: hn } = await supabase
-        .from("head_nurses")
-        .select("department_id, departments:departments(name)")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      try {
+        const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+        const token = (session as any)?.access_token;
+        const res = await fetch(`${API_BASE}/db/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ table: "head_nurses", action: "select", filters: [{ field: "user_id", op: "eq", value: user.id }], options: { maybeSingle: true } }),
+        });
+        if (!res.ok) {
+          setLoading(false);
+          return;
+        }
+        const json = await res.json();
+        const deptId = json.data?.department_id ?? null;
+        const deptName = json.data?.departments?.name ?? null;
+        setMyDeptId(deptId);
+        setMyDeptName(deptName);
 
-      const deptId = hn?.department_id ?? null;
-      const deptName = (hn?.departments as any)?.name ?? null;
-      setMyDeptId(deptId);
-      setMyDeptName(deptName);
-
-      if (deptId) {
-        await fetchData(deptId);
-      } else {
-        setLoading(false); // no department assigned to this HN
+        if (deptId) {
+          await fetchData(deptId);
+        } else {
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error("Error initializing manage view", err);
+        setLoading(false);
       }
     };
     init();
-  }, [user, fetchData]);
+  }, [user, fetchData, session]);
 
   const handleAddNurse = async () => {
     // 1. Basic presence validation
@@ -927,41 +1318,51 @@ const HNManageView = () => {
     }
 
     setSaving(true);
-    const { error } = await supabase.from("nurses").insert({
-      name: newName.trim(),
-      phone: phoneDigits,
-      age: newAge ? parseInt(newAge) : null,
-      gender: newGender as any || null,
-      division_id: newDivisionId || null,
-      current_department_id: myDeptId,
-      experience_years: newExperience ? parseInt(newExperience) : 0,
-      exam_score_percentage: newExamScore ? parseFloat(newExamScore) : null,
-    });
-
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    } else {
+    try {
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+      const token = (session as any)?.access_token;
+      const res = await fetch(`${API_BASE}/db/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          table: "nurses",
+          action: "insert",
+          payload: {
+            name: newName.trim(),
+            phone: phoneDigits,
+            age: newAge ? parseInt(newAge) : null,
+            gender: newGender as any || null,
+            division_id: newDivisionId || null,
+            current_department_id: myDeptId,
+            experience_years: newExperience ? parseInt(newExperience) : 0,
+            exam_score_percentage: newExamScore ? parseFloat(newExamScore) : null,
+          }
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to add nurse");
+      }
       toast({ title: "Nurse Added", description: `${newName} has been added to ${myDeptName || "your department"}.` });
       setNewName(""); setNewPhone(""); setNewAge(""); setNewGender(""); setNewDivisionId(""); setNewExperience(""); setNewExamScore("");
       setShowAdd(false);
-      fetchData(myDeptId);
+      if (myDeptId) await fetchData(myDeptId);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const handleAssignAcuity = async (nurseId: string, divisionId: string) => {
     setAssigningAcuity((prev) => ({ ...prev, [nurseId]: true }));
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
+      const token = (session as any)?.access_token;
       const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
       const res = await fetch(`${apiBase}/functions/nurses/${nurseId}/acuity`, {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ division_id: divisionId || null }),
       });
 
@@ -969,13 +1370,7 @@ const HNManageView = () => {
       if (!res.ok) throw new Error(json.error || "Failed to update acuity");
 
       // Update local state with the server's confirmed value
-      setNurses((prev) =>
-        prev.map((n) =>
-          n.id !== nurseId
-            ? n
-            : { ...n, division_id: json.division_id, divisions: json.divisions }
-        )
-      );
+      setNurses((prev) => prev.map((n) => (n.id !== nurseId ? n : { ...n, division_id: json.division_id, divisions: json.divisions })));
       toast({ title: "Acuity Assigned", description: "Nurse acuity level updated." });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -988,18 +1383,13 @@ const HNManageView = () => {
   const handleRemove = async () => {
     if (!nurseToRemove) return;
     setRemovingNurse(true);
-
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData.session?.access_token;
+    const token = (session as any)?.access_token;
     const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
     try {
       const updateRes = await fetch(`${apiBase}/functions/nurses/${nurseToRemove.id}/deactivate`, {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       });
 
       if (!updateRes.ok) {

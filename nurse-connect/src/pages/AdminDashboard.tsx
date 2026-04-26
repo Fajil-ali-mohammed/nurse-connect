@@ -190,25 +190,27 @@ const AdminOverview = () => {
 
   useEffect(() => {
     const fetchAll = async () => {
-      const [nursesRes, shiftsRes, swapsRes, deptsRes, divsRes, logsRes] = await Promise.all([
-        supabase.from("nurses").select("id", { count: "exact", head: true }).eq("is_active", true),
+      const [nursesRes, headNursesRes, shiftsRes, swapsRes, deptsRes, nursesDivRes, headNursesDivRes, logsRes] = await Promise.all([
+        supabase.from("nurses").select("id", { count: "exact", head: true }),
+        supabase.from("head_nurses").select("id", { count: "exact", head: true }),
         supabase.from("schedules").select("id", { count: "exact", head: true }).gte("duty_date", new Date().toISOString().split("T")[0]),
         supabase.from("shift_swap_requests").select("id", { count: "exact", head: true }).eq("status", "pending"),
         supabase.from("departments").select("id", { count: "exact", head: true }),
-        supabase.from("nurses").select("division_id, divisions:divisions(name)").eq("is_active", true),
+        supabase.from("nurses").select("division_id, divisions:divisions(name)"),
+        supabase.from("head_nurses").select("division_id, divisions:divisions(name)"),
         supabase.from("activity_logs").select("*").order("created_at", { ascending: false }).limit(5),
       ]);
 
       setStats({
-        nurses: nursesRes.count || 0,
+        nurses: (nursesRes.count || 0) + (headNursesRes.count || 0),
         shifts: shiftsRes.count || 0,
         pendingSwaps: swapsRes.count || 0,
         departments: deptsRes.count || 0,
       });
 
-      // Calculate division distribution
+      // Calculate division distribution (including both nurses and head nurses)
       const divCounts: Record<string, { name: string; count: number }> = {};
-      for (const n of (divsRes.data || []) as any[]) {
+      for (const n of [...(nursesDivRes.data || []), ...(headNursesDivRes.data || [])] as any[]) {
         const divName = n.divisions?.name || "Unassigned";
         if (!divCounts[divName]) divCounts[divName] = { name: divName, count: 0 };
         divCounts[divName].count++;
@@ -293,23 +295,26 @@ const AdminHeadNurses = () => {
   const [headNurses, setHeadNurses] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
   const [divisions, setDivisions] = useState<any[]>([]);
+  const [wards, setWards] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: "", username: "", password: "", confirmPassword: "", department_id: "", division_id: "" });
+  const [form, setForm] = useState({ name: "", username: "", password: "", confirmPassword: "", department_id: "", division_id: "", ward_id: "" });
   const navigate = useNavigate();
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
 
   const fetchData = async () => {
     setLoading(true);
-    const [hnRes, deptRes, divRes] = await Promise.all([
+    const [hnRes, deptRes, divRes, wardsRes] = await Promise.all([
       supabase.from("head_nurses").select("id, name, username, department_id, division_id, departments:departments(name), divisions:divisions(name), created_at"),
       supabase.from("departments").select("id, name").order("name"),
       supabase.from("divisions").select("id, name").order("name"),
+      supabase.from("wards").select("id, name, department_id").order("name"),
     ]);
     setHeadNurses(hnRes.data || []);
     setDepartments(deptRes.data || []);
     setDivisions(divRes.data || []);
+    setWards(wardsRes.data || []);
     const loadedHn = hnRes.data || [];
     setHeadNurses(loadedHn);
     setExpandedDepts(new Set(loadedHn.map((r: any) => r.departments?.name || "Unassigned")));
@@ -347,14 +352,15 @@ const AdminHeadNurses = () => {
           role: "head_nurse",
           name: form.name,
           username: form.username,
-          department_id: form.department_id || null,
-          division_id: form.division_id || null,
+            department_id: form.department_id || null,
+            division_id: form.division_id || null,
+            ward_id: form.ward_id || null,
         }),
       });
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Failed to create head nurse");
       toast({ title: "Head Nurse Created", description: `${form.name} can now log in with username "${form.username}".` });
-      setForm({ name: "", username: "", password: "", confirmPassword: "", department_id: "", division_id: "" });
+      setForm({ name: "", username: "", password: "", confirmPassword: "", department_id: "", division_id: "", ward_id: "" });
       setShowForm(false);
       await fetchData();
     } catch (err: any) {
@@ -430,6 +436,19 @@ const AdminHeadNurses = () => {
               </Select>
             </div>
             <div>
+              <label className="text-xs font-medium text-muted-foreground">Ward</label>
+              <Select value={form.ward_id} onValueChange={(v) => setForm({ ...form, ward_id: v })}>
+                <SelectTrigger className="mt-1"><SelectValue placeholder="Select Ward" /></SelectTrigger>
+                <SelectContent>
+                  {wards
+                    .filter((w) => !form.department_id || String(w.department_id) === String(form.department_id))
+                    .map((w) => (
+                      <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <label className="text-xs font-medium text-muted-foreground">Acuity (Division)</label>
               <Select value={form.division_id} onValueChange={(v) => setForm({ ...form, division_id: v })}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="Select Acuity" /></SelectTrigger>
@@ -486,6 +505,7 @@ const AdminHeadNurses = () => {
                       <tr className="border-b bg-muted/30">
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Name</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Username</th>
+                        <th className="px-4 py-3 text-left font-semibold text-foreground">Ward</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Acuity</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Created</th>
                       </tr>
@@ -495,6 +515,7 @@ const AdminHeadNurses = () => {
                         <tr key={hn.id} className="hover:bg-muted/50 transition-colors">
                           <td className="px-4 py-3 font-medium text-foreground">{hn.name}</td>
                           <td className="px-4 py-3 text-muted-foreground">{hn.username}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{hn.wards?.name || "-"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{hn.divisions?.name || "-"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{new Date(hn.created_at).toLocaleDateString()}</td>
                         </tr>
@@ -520,17 +541,18 @@ const AdminNurses = () => {
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
   const [nurseToRemove, setNurseToRemove] = useState<any>(null);
   const [removingNurse, setRemovingNurse] = useState(false);
+  const [togglingNurse, setTogglingNurse] = useState<string | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
     const [nursesRes, headNursesRes] = await Promise.all([
       supabase
         .from("nurses")
-        .select("id, name, phone, is_active, divisions:divisions(name), departments:departments(name)")
+        .select("id, name, phone, is_active, divisions:divisions(name), departments:departments(name), wards:wards(name)")
         .order("name"),
       supabase
         .from("head_nurses")
-        .select("id, name, username, departments:departments(name), divisions:divisions(name)")
+        .select("id, name, username, departments:departments(name), divisions:divisions(name), wards:wards(name)")
         .order("name")
     ]);
 
@@ -542,6 +564,7 @@ const AdminNurses = () => {
       is_active: true,
       divisions: hn.divisions,
       departments: hn.departments,
+      wards: hn.wards,
       role: 'head_nurse'
     }));
 
@@ -553,6 +576,35 @@ const AdminNurses = () => {
   };
 
   useEffect(() => { fetchData(); }, []);
+
+  const handleToggleStatus = async (nurse: any) => {
+    if (nurse.role === 'head_nurse') {
+      toast({ title: "Error", description: "Cannot deactivate head nurses from here", variant: "destructive" });
+      return;
+    }
+    
+    setTogglingNurse(nurse.id);
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
+
+    try {
+      const res = await fetch(`${apiBase}/functions/nurses/${nurse.id}/toggle-status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error("Failed to toggle nurse status");
+      toast({ 
+        title: "Status Updated", 
+        description: `${nurse.name} is now ${nurse.is_active ? "Inactive" : "Active"}.` 
+      });
+      await fetchData();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setTogglingNurse(null);
+    }
+  };
 
   const handleRemove = async () => {
     if (!nurseToRemove) return;
@@ -647,6 +699,7 @@ const AdminNurses = () => {
                       <tr className="border-b bg-muted/30">
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Name</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Division</th>
+                        <th className="px-4 py-3 text-left font-semibold text-foreground">Ward</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Phone</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Status</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Actions</th>
@@ -662,6 +715,7 @@ const AdminNurses = () => {
                             )}
                           </td>
                           <td className="px-4 py-3 text-muted-foreground">{n.divisions?.name || "-"}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{n.wards?.name || "-"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{n.phone}</td>
                           <td className="px-4 py-3">
                             <Badge className={n.is_active ? "bg-primary/10 text-primary border-0" : "bg-destructive/10 text-destructive border-0"}>
@@ -669,16 +723,37 @@ const AdminNurses = () => {
                             </Badge>
                           </td>
                           <td className="px-4 py-3">
-                            {n.role === 'nurse' && n.is_active && (
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className="text-destructive hover:bg-destructive/10 h-8 w-8 p-0" 
-                                onClick={() => setNurseToRemove(n)}
-                              >
-                                <Trash2 size={14} />
-                              </Button>
-                            )}
+                            <div className="flex gap-1">
+                              {n.role === 'nurse' && (
+                                <>
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className={`h-8 w-8 p-0 ${n.is_active ? "text-destructive hover:bg-destructive/10" : "text-primary hover:bg-primary/10"}`}
+                                    onClick={() => handleToggleStatus(n)}
+                                    disabled={togglingNurse === n.id}
+                                  >
+                                    {togglingNurse === n.id ? (
+                                      <Loader2 size={14} className="animate-spin" />
+                                    ) : n.is_active ? (
+                                      <X size={14} />
+                                    ) : (
+                                      <Check size={14} />
+                                    )}
+                                  </Button>
+                                  {n.is_active && (
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-destructive hover:bg-destructive/10 h-8 w-8 p-0" 
+                                      onClick={() => setNurseToRemove(n)}
+                                    >
+                                      <Trash2 size={14} />
+                                    </Button>
+                                  )}
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -734,9 +809,11 @@ const YEAR_OPTIONS = [2024, 2025, 2026, 2027, 2028];
 const AdminSchedules = () => {
   const [schedules, setSchedules]     = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
+  const [wards, setWards] = useState<any[]>([]);
   const [loading, setLoading]         = useState(true);
   const [search, setSearch]           = useState("");
   const [selectedDept, setSelectedDept] = useState("all");
+  const [selectedWard, setSelectedWard] = useState("all");
   const [selectedShift, setSelectedShift] = useState("all");
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
 
@@ -745,8 +822,12 @@ const AdminSchedules = () => {
   const [selectedYear, setSelectedYear] = useState(String(now.getFullYear()));
 
   useEffect(() => {
-    supabase.from("departments").select("id, name").order("name").then(({ data }) => {
-      setDepartments(data || []);
+    Promise.all([
+      supabase.from("departments").select("id, name").order("name"),
+      supabase.from("wards").select("id, name, department_id").order("name"),
+    ]).then(([{ data: ddata }, { data: wdata }]) => {
+      setDepartments(ddata || []);
+      setWards(wdata || []);
     });
   }, []);
 
@@ -755,7 +836,7 @@ const AdminSchedules = () => {
       setLoading(true);
       const { data } = await supabase
         .from("schedules")
-        .select("id, duty_date, shift_type, nurse:nurses(name), department:departments(id, name)")
+        .select("id, duty_date, shift_type, nurse:nurses(name), department:departments(id, name), ward:wards(id, name)")
         .eq("week_number", Number(selectedWeek))
         .eq("year", Number(selectedYear))
         .order("duty_date")
@@ -784,8 +865,9 @@ const AdminSchedules = () => {
     const q = search.toLowerCase();
     const matchesSearch = (s.nurse?.name || "").toLowerCase().includes(q) || (s.department?.name || "").toLowerCase().includes(q);
     const matchesDept  = selectedDept === "all"  || s.department?.name === selectedDept;
+    const matchesWard  = selectedWard === "all" || s.ward?.id === selectedWard;
     const matchesShift = selectedShift === "all" || s.shift_type === selectedShift;
-    return matchesSearch && matchesDept && matchesShift;
+    return matchesSearch && matchesDept && matchesWard && matchesShift;
   });
 
   // Group by department -> date -> shift
@@ -850,6 +932,19 @@ const AdminSchedules = () => {
               <SelectItem value="all">All Departments</SelectItem>
               {departments.map((d) => (
                 <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Ward */}
+          <Select value={selectedWard} onValueChange={setSelectedWard}>
+            <SelectTrigger className="h-9 w-52">
+              <SelectValue placeholder="All Wards" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Wards</SelectItem>
+              {wards.map((w) => (
+                <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
