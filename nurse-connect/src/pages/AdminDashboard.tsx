@@ -182,7 +182,7 @@ const AdminDashboard = () => {
 
 // --- Overview ---------------------------------------------------
 
-const AdminOverview = () => {
+function AdminOverview() {
   const [stats, setStats] = useState({ nurses: 0, shifts: 0, pendingSwaps: 0, departments: 0 });
   const [divisionDist, setDivisionDist] = useState<{ name: string; count: number }[]>([]);
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
@@ -289,9 +289,10 @@ const AdminOverview = () => {
   );
 };
 
+
 // --- Head Nurses ------------------------------------------------
 
-const AdminHeadNurses = () => {
+function AdminHeadNurses() {
   const [headNurses, setHeadNurses] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
   const [divisions, setDivisions] = useState<any[]>([]);
@@ -300,13 +301,15 @@ const AdminHeadNurses = () => {
   const [showForm, setShowForm] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ name: "", username: "", password: "", confirmPassword: "", department_id: "", division_id: "", ward_id: "" });
+  const [editingHN, setEditingHN] = useState<any>(null);
+  const [editForm, setEditForm] = useState({ experience_years: "", exam_score_percentage: "" });
   const navigate = useNavigate();
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
 
   const fetchData = async () => {
     setLoading(true);
     const [hnRes, deptRes, divRes, wardsRes] = await Promise.all([
-      supabase.from("head_nurses").select("id, name, username, department_id, division_id, departments:departments(name), divisions:divisions(name), created_at"),
+      supabase.from("head_nurses").select("id, name, username, department_id, division_id, experience_years, exam_score_percentage, departments:departments(name), divisions:divisions(name), wards:wards(name), created_at"),
       supabase.from("departments").select("id, name").order("name"),
       supabase.from("divisions").select("id, name").order("name"),
       supabase.from("wards").select("id, name, department_id").order("name"),
@@ -370,8 +373,6 @@ const AdminHeadNurses = () => {
     }
   };
 
-  if (loading) return <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
-
   const toggleDept = (name: string) => {
     setExpandedDepts((prev) => {
       const next = new Set(prev);
@@ -389,6 +390,49 @@ const AdminHeadNurses = () => {
   }, {});
 
   const hnDeptNames = Object.keys(groupedHeadNurses).sort();
+
+  const handleEditHN = (hn: any) => {
+    setEditingHN(hn);
+    setEditForm({
+      experience_years: hn.experience_years?.toString() || "0",
+      exam_score_percentage: hn.exam_score_percentage?.toString() || "",
+    });
+  };
+
+  const handleSaveHNEdit = async () => {
+    if (!editingHN) return;
+    setCreating(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
+      
+      const res = await fetch(`${apiBase}/db/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          table: "head_nurses",
+          action: "update",
+          filters: [{ field: "id", op: "eq", value: editingHN.id }],
+          payload: {
+            experience_years: parseInt(editForm.experience_years) || 0,
+            exam_score_percentage: editForm.exam_score_percentage ? parseFloat(editForm.exam_score_percentage) : null,
+          }
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to update head nurse");
+      toast({ title: "Head Nurse Updated", description: "Profile has been updated successfully." });
+      setEditingHN(null);
+      await fetchData();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  if (loading) return <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
 
   return (
     <div className="animate-fade-in space-y-4">
@@ -508,6 +552,7 @@ const AdminHeadNurses = () => {
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Ward</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Acuity</th>
                         <th className="px-4 py-3 text-left font-semibold text-foreground">Created</th>
+                        <th className="px-4 py-3 text-left font-semibold text-foreground">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/50">
@@ -518,6 +563,11 @@ const AdminHeadNurses = () => {
                           <td className="px-4 py-3 text-muted-foreground">{hn.wards?.name || "-"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{hn.divisions?.name || "-"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{new Date(hn.created_at).toLocaleDateString()}</td>
+                          <td className="px-4 py-3">
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => handleEditHN(hn)}>
+                              <Edit3 size={14} />
+                            </Button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -528,13 +578,49 @@ const AdminHeadNurses = () => {
           ))}
         </div>
       )}
+
+      {/* Edit Head Nurse Dialog */}
+      <Dialog open={!!editingHN} onOpenChange={(open) => !open && setEditingHN(null)}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Edit Head Nurse</DialogTitle>
+            <DialogDescription>Update profile for {editingHN?.name}.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Experience (Years)</label>
+              <Input 
+                type="number" 
+                value={editForm.experience_years} 
+                onChange={(e) => setEditForm({ ...editForm, experience_years: e.target.value })} 
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Exam Score (%)</label>
+              <Input 
+                type="number" 
+                step="0.01"
+                value={editForm.exam_score_percentage} 
+                onChange={(e) => setEditForm({ ...editForm, exam_score_percentage: e.target.value })} 
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingHN(null)}>Cancel</Button>
+            <Button variant="hero" onClick={handleSaveHNEdit} disabled={creating}>
+              {creating ? <Loader2 size={14} className="mr-1 animate-spin" /> : <Check size={14} className="mr-1" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
 
 // --- Nurses -----------------------------------------------------
 
-const AdminNurses = () => {
+function AdminNurses() {
   const [nurses, setNurses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -542,17 +628,20 @@ const AdminNurses = () => {
   const [nurseToRemove, setNurseToRemove] = useState<any>(null);
   const [removingNurse, setRemovingNurse] = useState(false);
   const [togglingNurse, setTogglingNurse] = useState<string | null>(null);
+  const [editingNurse, setEditingNurse] = useState<any>(null);
+  const [editForm, setEditForm] = useState({ experience_years: "", exam_score_percentage: "" });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
     const [nursesRes, headNursesRes] = await Promise.all([
       supabase
         .from("nurses")
-        .select("id, name, phone, is_active, divisions:divisions(name), departments:departments(name), wards:wards(name)")
+        .select("id, name, phone, is_active, experience_years, exam_score_percentage, divisions:divisions(name), departments:departments(name), wards:wards(name)")
         .order("name"),
       supabase
         .from("head_nurses")
-        .select("id, name, username, departments:departments(name), divisions:divisions(name), wards:wards(name)")
+        .select("id, name, username, experience_years, exam_score_percentage, departments:departments(name), divisions:divisions(name), wards:wards(name)")
         .order("name")
     ]);
 
@@ -742,14 +831,30 @@ const AdminNurses = () => {
                                     )}
                                   </Button>
                                   {n.is_active && (
-                                    <Button 
-                                      variant="ghost" 
-                                      size="sm" 
-                                      className="text-destructive hover:bg-destructive/10 h-8 w-8 p-0" 
-                                      onClick={() => setNurseToRemove(n)}
-                                    >
-                                      <Trash2 size={14} />
-                                    </Button>
+                                    <>
+                                      <Button 
+                                        variant="ghost" 
+                                        size="sm" 
+                                        className="text-primary hover:bg-primary/10 h-8 w-8 p-0" 
+                                        onClick={() => {
+                                          setEditingNurse(n);
+                                          setEditForm({
+                                            experience_years: n.experience_years?.toString() || "0",
+                                            exam_score_percentage: n.exam_score_percentage?.toString() || "",
+                                          });
+                                        }}
+                                      >
+                                        <Edit3 size={14} />
+                                      </Button>
+                                      <Button 
+                                        variant="ghost" 
+                                        size="sm" 
+                                        className="text-destructive hover:bg-destructive/10 h-8 w-8 p-0" 
+                                        onClick={() => setNurseToRemove(n)}
+                                      >
+                                        <Trash2 size={14} />
+                                      </Button>
+                                    </>
                                   )}
                                 </>
                               )}
@@ -790,6 +895,73 @@ const AdminNurses = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Nurse Dialog */}
+      <Dialog open={!!editingNurse} onOpenChange={(open) => !open && setEditingNurse(null)}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Edit Nurse Stats</DialogTitle>
+            <DialogDescription>Update stats for {editingNurse?.name}.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Experience (Years)</label>
+              <Input 
+                type="number" 
+                value={editForm.experience_years} 
+                onChange={(e) => setEditForm({ ...editForm, experience_years: e.target.value })} 
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Exam Score (%)</label>
+              <Input 
+                type="number" 
+                step="0.01"
+                value={editForm.exam_score_percentage} 
+                onChange={(e) => setEditForm({ ...editForm, exam_score_percentage: e.target.value })} 
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingNurse(null)}>Cancel</Button>
+            <Button variant="hero" onClick={async () => {
+              if (!editingNurse) return;
+              setSavingEdit(true);
+              try {
+                const { data: sessionData } = await supabase.auth.getSession();
+                const token = sessionData.session?.access_token;
+                const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
+                
+                const res = await fetch(`${apiBase}/db/query`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                  body: JSON.stringify({
+                    table: "nurses",
+                    action: "update",
+                    filters: [{ field: "id", op: "eq", value: editingNurse.id }],
+                    payload: {
+                      experience_years: parseInt(editForm.experience_years) || 0,
+                      exam_score_percentage: editForm.exam_score_percentage ? parseFloat(editForm.exam_score_percentage) : null,
+                    }
+                  }),
+                });
+
+                if (!res.ok) throw new Error("Failed to update nurse");
+                toast({ title: "Nurse Updated", description: "Stats have been updated successfully." });
+                setEditingNurse(null);
+                await fetchData();
+              } catch (err: any) {
+                toast({ title: "Error", description: err.message, variant: "destructive" });
+              } finally {
+                setSavingEdit(false);
+              }
+            }} disabled={savingEdit}>
+              {savingEdit ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Check size={14} className="mr-2" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
@@ -806,7 +978,7 @@ const SHIFT_COLORS: Record<string, { bg: string; text: string; dot: string }> = 
 const WEEK_OPTIONS = Array.from({ length: 53 }, (_, i) => i + 1);
 const YEAR_OPTIONS = [2024, 2025, 2026, 2027, 2028];
 
-const AdminSchedules = () => {
+function AdminSchedules() {
   const [schedules, setSchedules]     = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
   const [wards, setWards] = useState<any[]>([]);
@@ -1112,7 +1284,7 @@ const AdminSchedules = () => {
 
 // --- Swaps ------------------------------------------------------
 
-const AdminSwaps = () => {
+function AdminSwaps() {
   const [swaps, setSwaps] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -1193,7 +1365,7 @@ const AdminSwaps = () => {
 
 // --- Logs -------------------------------------------------------
 
-const AdminLogs = () => {
+function AdminLogs() {
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -1241,7 +1413,7 @@ const AdminLogs = () => {
 
 // --- Admins -----------------------------------------------------
 
-const AdminAdmins = () => {
+function AdminAdmins() {
   const [admins, setAdmins] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -1365,5 +1537,7 @@ const AdminAdmins = () => {
     </div>
   );
 };
+
+
 
 export default AdminDashboard;

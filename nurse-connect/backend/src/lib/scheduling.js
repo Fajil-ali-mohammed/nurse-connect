@@ -137,18 +137,29 @@ export function createBalancedScheduleEntries(
         const targetForThisDiv = acuityTargets[divId] || 0;
         if (targetForThisDiv === 0) continue;
 
-        const divNurses = byDivision[divId] || [];
-        if (divNurses.length === 0) continue;
-
-        const shuffledDivNurses = [...divNurses].sort(() => Math.random() - 0.5);
-        const candidates = shuffledDivNurses.sort((a, b) => {
+        let pickedForDiv = 0;
+        let candidates = [];
+        
+        // Primary candidates: from this division
+        const primaryNurses = byDivision[divId] || [];
+        candidates = [...primaryNurses].sort(() => Math.random() - 0.5).sort((a, b) => {
           const ta = track.get(a._id.toString());
           const tb = track.get(b._id.toString());
           return ta.shiftsThisWeek - tb.shiftsThisWeek;
         });
 
-        let pickedForDiv = 0;
-        for (const nurse of candidates) {
+        // If we can't find enough in primary, we'll look at ALL nurses (the closest available)
+        // Note: For simplicity in the non-AI fallback, we just look at all other nurses
+        const secondaryNurses = rosterOrder.filter(n => (n.division_id ? n.division_id.toString() : "no_division") !== divId);
+        const secondaryCandidates = [...secondaryNurses].sort(() => Math.random() - 0.5).sort((a, b) => {
+          const ta = track.get(a._id.toString());
+          const tb = track.get(b._id.toString());
+          return ta.shiftsThisWeek - tb.shiftsThisWeek;
+        });
+
+        const allCandidates = [...candidates, ...secondaryCandidates];
+
+        for (const nurse of allCandidates) {
           if (pickedForDiv >= targetForThisDiv) break;
 
           const nid = nurse._id.toString();

@@ -58,6 +58,10 @@ router.post("/create-user", requireAuth, requireRole("admin"), async (req, res) 
       return res.status(400).json({ error: "Invalid create-user payload" });
     }
 
+    if (role === "head_nurse" && !ward_id) {
+      return res.status(400).json({ error: "Ward ID is required for head nurse creation" });
+    }
+
     if (!EMAIL_REGEX.test(normalizedEmail)) {
       return res.status(400).json({ error: "Invalid email format" });
     }
@@ -93,7 +97,14 @@ router.post("/create-user", requireAuth, requireRole("admin"), async (req, res) 
 
     await UserRole.create({ user_id: user._id, role });
     if (role === "head_nurse") {
-      await HeadNurse.create({ user_id: user._id, name: normalizedName, username: normalizedUsername, department_id: department_id || null, division_id: division_id || null, ward_id: ward_id || null });
+      await HeadNurse.create({ 
+        user_id: user._id, 
+        name: normalizedName, 
+        username: normalizedUsername, 
+        department_id: department_id || null, 
+        division_id: division_id || null, 
+        ward_id: ward_id || null 
+      });
     }
     if (role === "admin") {
       await Admin.create({ user_id: user._id, name: normalizedName, username: normalizedUsername });

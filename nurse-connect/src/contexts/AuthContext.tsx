@@ -49,18 +49,25 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   useEffect(() => {
-    // Set up auth listener first
+    // Set up auth listener
     const { data: { subscription } } = api.auth.onAuthStateChange(
       (_event, session) => {
         setSession(session);
         setUser(session?.user ?? null);
 
         if (session?.access_token) {
+          setLoading(true);
           // IMPORTANT: Use setTimeout to avoid deadlock in onAuthStateChange
           setTimeout(async () => {
-            const userRole = await fetchRole(session.access_token);
-            setRole(userRole);
-            setLoading(false);
+            try {
+              const userRole = await fetchRole(session.access_token);
+              setRole(userRole);
+            } catch (err) {
+              console.error("Auth listener role fetch error:", err);
+              setRole(null);
+            } finally {
+              setLoading(false);
+            }
           }, 0);
         } else {
           setRole(null);
@@ -68,20 +75,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         }
       }
     );
-
-    // Then check for existing session
-    api.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.access_token) {
-        fetchRole(session.access_token).then((userRole) => {
-          setRole(userRole);
-          setLoading(false);
-        });
-      } else {
-        setLoading(false);
-      }
-    });
 
     return () => subscription.unsubscribe();
   }, []);
