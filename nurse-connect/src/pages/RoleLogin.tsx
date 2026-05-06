@@ -1,11 +1,11 @@
-﻿/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ArrowLeft, User, Lock, Loader2 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/api/client";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import logo from "@/assets/logo.svg";
@@ -40,7 +40,7 @@ const RoleLogin = ({ role, dashboardPath, emailDomain }: RoleLoginProps) => {
       const email = normalizedInput.includes("@")
         ? normalizedInput
         : `${normalizedInput}@${emailDomain}`;
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await api.auth.signInWithPassword({ email, password });
       if (error) throw error;
       // Navigation is handled by the useEffect once authRole is loaded
     } catch (error: any) {

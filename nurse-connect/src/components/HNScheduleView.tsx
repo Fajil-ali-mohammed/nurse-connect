@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Search, Wand2, Edit3, Trash2, Loader2, ChevronDown, Settings2, Zap, Calendar
@@ -58,7 +58,7 @@ export const HNScheduleView = (props: { departmentId?: string | null; wardId?: s
   const [scheduleData, setScheduleData] = useState<ScheduleRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [fallbackDialog, setFallbackDialog] = useState({ open: false, message: "", prompt: "" });
+  const [fallbackDialog, setFallbackDialog] = useState({ open: false, message: "", prompt: "", confirmOverwrite: false });
   const [overwriteDialog, setOverwriteDialog] = useState({ open: false, message: "", prompt: "" });
   const [departmentId, setDepartmentId] = useState<string | null>(null);
   const [wardId, setWardId] = useState<string | null>(null);
@@ -140,10 +140,16 @@ export const HNScheduleView = (props: { departmentId?: string | null; wardId?: s
   }, [session]);
 
   const fetchAvailableNurses = useCallback(async () => {
-    if (!departmentId) return;
+    if (!wardId && !departmentId) return;
     try {
       const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
       const token = (session as any)?.access_token;
+
+      // Use ward filter if available (most specific), fall back to department
+      const nurseLocationFilters = wardId
+        ? [{ field: "current_ward_id", op: "eq", value: wardId }]
+        : [{ field: "current_department_id", op: "eq", value: departmentId }];
+
       const res = await fetch(`${API_BASE}/db/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -151,8 +157,7 @@ export const HNScheduleView = (props: { departmentId?: string | null; wardId?: s
           table: "nurses",
           action: "select",
           filters: [
-            { field: "current_department_id", op: "eq", value: departmentId },
-            ...(wardId ? [{ field: "current_ward_id", op: "eq", value: wardId }] : []),
+            ...nurseLocationFilters,
             { field: "is_active", op: "eq", value: true },
           ],
           orders: [{ field: "name", ascending: true }],
@@ -167,32 +172,44 @@ export const HNScheduleView = (props: { departmentId?: string | null; wardId?: s
   }, [departmentId, wardId, session]);
 
   const fetchSchedule = useCallback(async () => {
-    if (!departmentId) return;
+    if (!wardId && !departmentId) return;
     setLoading(true);
     try {
       const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
       const token = (session as any)?.access_token;
-      const res = await fetch(`${API_BASE}/db/query`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          table: "schedules",
-          action: "select",
-          filters: [
-            { field: "week_number", op: "eq", value: selectedWeek },
-            { field: "year", op: "eq", value: selectedYear },
-            { field: "department_id", op: "eq", value: departmentId },
-            ...(wardId ? [{ field: "ward_id", op: "eq", value: wardId }] : []),
-          ],
-          orders: [
-            { field: "duty_date", ascending: true },
-            { field: "shift_type", ascending: true },
-          ],
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to fetch schedules");
-      const json = await res.json();
-      setScheduleData((json.data as ScheduleRow[]) || []);
+
+      const doQuery = async (filters: object[]) => {
+        const res = await fetch(`${API_BASE}/db/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            table: "schedules",
+            action: "select",
+            filters: [
+              { field: "week_number", op: "eq", value: selectedWeek },
+              { field: "year", op: "eq", value: selectedYear },
+              ...filters,
+            ],
+            orders: [
+              { field: "duty_date", ascending: true },
+              { field: "shift_type", ascending: true },
+            ],
+          }),
+        });
+        if (!res.ok) throw new Error("Failed to fetch schedules");
+        return (await res.json()).data as ScheduleRow[];
+      };
+
+      // Try ward_id first (schedules generated after latest fix)
+      let data: ScheduleRow[] = [];
+      if (wardId) {
+        data = await doQuery([{ field: "ward_id", op: "eq", value: wardId }]);
+      }
+      // Fall back to department_id if no ward-level results found (older data)
+      if (data.length === 0 && departmentId) {
+        data = await doQuery([{ field: "department_id", op: "eq", value: departmentId }]);
+      }
+      setScheduleData(data || []);
     } catch (err) {
       console.error("Error fetching schedules:", err);
     }
@@ -246,14 +263,21 @@ export const HNScheduleView = (props: { departmentId?: string | null; wardId?: s
           return;
         }
         if ((result?.code === "INSUFFICIENT_NURSES" || result?.code === "INSUFFICIENT_ACUITY_RESOURCES") && result?.can_force_generate && !forceAssignRemaining) {
-          setFallbackDialog({ open: true, message: result.error, prompt: result.prompt });
+          setFallbackDialog({ open: true, message: result.error, prompt: result.prompt, confirmOverwrite });
           setGenerating(false);
           return;
         }
         throw new Error(result?.error || "Unable to generate schedule");
       }
-      toast({ title: "Schedule Generated" });
+      const totalEntries = result?.stats?.total_entries ?? 0;
+      const nursesCount = result?.stats?.nurses_scheduled ?? 0;
+      toast({
+        title: "✅ Schedule Generated",
+        description: `${totalEntries} shift${totalEntries !== 1 ? "s" : ""} assigned across ${nursesCount} nurse${nursesCount !== 1 ? "s" : ""}.`,
+      });
+      // Always refresh the schedule grid so results are visible immediately
       await fetchSchedule();
+      await fetchAvailableNurses();
     } catch (error: any) {
       toast({ title: "Cannot Auto-Generate", description: error.message, variant: "destructive" });
     } finally {
@@ -463,7 +487,10 @@ export const HNScheduleView = (props: { departmentId?: string | null; wardId?: s
       
       <Dialog open={!!editingSchedule} onOpenChange={(open) => !open && setEditingSchedule(null)}>
         <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader><DialogTitle>Edit Shift</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Edit Shift</DialogTitle>
+            <DialogDescription>Change the assigned nurse or shift type for this schedule entry.</DialogDescription>
+          </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
               <Label>Nurse</Label>
@@ -493,18 +520,24 @@ export const HNScheduleView = (props: { departmentId?: string | null; wardId?: s
       {/* Fallback & Overwrite Dialogs */}
       <Dialog open={fallbackDialog.open} onOpenChange={(open) => !open && setFallbackDialog({ ...fallbackDialog, open: false })}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Insufficient Resources</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Insufficient Resources</DialogTitle>
+            <DialogDescription>{fallbackDialog.prompt || "Not enough nurses to fully cover all acuity groups."}</DialogDescription>
+          </DialogHeader>
           <p className="text-sm py-4">{fallbackDialog.message}</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setFallbackDialog({ ...fallbackDialog, open: false })}>Cancel</Button>
-            <Button variant="pink" onClick={() => { setFallbackDialog({ ...fallbackDialog, open: false }); handleGenerate(true); }}>Generate Anyway</Button>
+            <Button variant="pink" onClick={() => { setFallbackDialog({ ...fallbackDialog, open: false }); handleGenerate(true, fallbackDialog.confirmOverwrite); }}>Generate Anyway</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={overwriteDialog.open} onOpenChange={(open) => !open && setOverwriteDialog({ ...overwriteDialog, open: false })}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Overwrite Schedule?</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Overwrite Schedule?</DialogTitle>
+            <DialogDescription>{overwriteDialog.prompt || "This will replace the existing schedule for the selected week."}</DialogDescription>
+          </DialogHeader>
           <p className="text-sm py-4">{overwriteDialog.message}</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOverwriteDialog({ ...overwriteDialog, open: false })}>Cancel</Button>

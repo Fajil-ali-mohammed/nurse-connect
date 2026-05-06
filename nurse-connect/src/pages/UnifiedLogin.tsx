@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, ArrowLeft, Mail, Lock } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/api/client";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import logo from "@/assets/logo.svg";
@@ -46,7 +46,7 @@ const UnifiedLogin = () => {
         return;
       }
 
-      const { error } = await supabase.auth.signInWithPassword({
+      const { error } = await api.auth.signInWithPassword({
         email: email.trim().toLowerCase(),
         password,
       });

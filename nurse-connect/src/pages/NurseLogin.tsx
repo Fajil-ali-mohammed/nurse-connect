@@ -1,11 +1,11 @@
-﻿/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ArrowLeft, Phone, Lock, UserPlus, Loader2 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/integrations/api/client";
 import { toast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import logo from "@/assets/logo.svg";
@@ -44,7 +44,7 @@ const NurseLogin = () => {
         }
 
         // Check if phone was pre-entered by head nurse
-        const { data: phoneExists, error: checkError } = await supabase.rpc(
+        const { data: phoneExists, error: checkError } = await api.rpc(
           "check_nurse_phone_exists",
           { phone_number: phone }
         );
@@ -62,7 +62,7 @@ const NurseLogin = () => {
 
         // Sign up using phone as email identifier
         const email = `${phone.replace(/[^0-9]/g, "")}@nurse.local`;
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        const { data: signUpData, error: signUpError } = await api.auth.signUp({
           email,
           password,
           options: { data: { full_name: name, phone, role: "nurse" } },
@@ -78,7 +78,7 @@ const NurseLogin = () => {
       } else {
         // Login
         const email = `${phone.replace(/[^0-9]/g, "")}@nurse.local`;
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await api.auth.signInWithPassword({ email, password });
         if (error) throw error;
         // Navigation handled by useEffect once auth role loads
       }

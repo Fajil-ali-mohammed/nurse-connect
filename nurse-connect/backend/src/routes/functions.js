@@ -177,11 +177,21 @@ router.post("/generate-schedule", requireAuth, requireRole("admin", "head_nurse"
       if (String(headNurse.ward_id) !== String(requestedWardId)) {
         return res.status(403).json({ error: "You can only generate schedules for your own ward" });
       }
-      targetWards = [{ _id: requestedWardId }];
+      // Fetch the full ward document so department_id is available downstream
+      const wardDoc = await Ward.findById(requestedWardId).lean();
+      if (!wardDoc) {
+        return res.status(400).json({ error: "Ward not found. Please contact admin." });
+      }
+      // Fall back to headNurse.department_id if the ward has no department_id
+      if (!wardDoc.department_id && headNurse.department_id) {
+        wardDoc.department_id = headNurse.department_id;
+      }
+      targetWards = [wardDoc];
     } else if (req.authUser.role === "admin") {
       // Admin can generate for specific ward, specific department (all wards in it), or all wards
       if (ward_id) {
-        targetWards = [{ _id: ward_id }];
+        const wardDoc = await Ward.findById(ward_id).lean();
+        targetWards = wardDoc ? [wardDoc] : [];
       } else if (department_id) {
         targetWards = await Ward.find({ department_id }).lean();
       } else {
@@ -195,8 +205,13 @@ router.post("/generate-schedule", requireAuth, requireRole("admin", "head_nurse"
       return res.status(400).json({ error: "No wards found to generate schedules for" });
     }
 
-    // Check if schedule already exists and handle confirmation (ward-level)
-    if (!confirm_overwrite) {
+    // Check if schedule already exists and handle confirmation (ward-level).
+    // If force_assign_remaining=true the user has already gone through the "Insufficient
+    // Resources" dialog which itself appeared after the overwrite dialog — so overwrite
+    // consent is implied. Requiring confirm_overwrite separately would create an
+    // unescapable 409 → 400 → 409 loop.
+    const effectiveConfirmOverwrite = confirm_overwrite || force_assign_remaining;
+    if (!effectiveConfirmOverwrite) {
       const existing = await Schedule.findOne({
         week_number,
         year,
@@ -354,13 +369,13 @@ router.post("/generate-schedule", requireAuth, requireRole("admin", "head_nurse"
         wardScheduleEntries = createBalancedScheduleEntries(
           nursesInWard,
           ward.department_id,
-          ward._id,
           days,
           shift_pattern,
           max_shifts_per_week,
           week_number,
           year,
           req.authUser.id,
+          ward._id,
           acuity_requirements
         );
       }
@@ -380,41 +395,79 @@ router.post("/generate-schedule", requireAuth, requireRole("admin", "head_nurse"
       });
     }
 
-    await Schedule.insertMany(entries);
-
+    // Hoist these before the notification try-block so the response can reference them
     const assignedNurseIds = [...new Set(entries.map((e) => e.nurse_id.toString()))];
-    const nurseUsers = await Nurse.find({ _id: { $in: assignedNurseIds }, user_id: { $ne: null } }).lean();
 
-    if (nurseUsers.length > 0) {
-      // Build a map: nurseId → their entries so each notification is personalised
-      const nurseEntryMap = {};
-      for (const entry of entries) {
-        const nid = entry.nurse_id.toString();
-        if (!nurseEntryMap[nid]) nurseEntryMap[nid] = [];
-        nurseEntryMap[nid].push(entry);
+    // Notify assigned nurses (personalised). Wrap in try/catch so notification failures
+    // never cause the schedule generation to be reported as failed.
+    try {
+      const nurseUsers = await Nurse.find({ _id: { $in: assignedNurseIds }, user_id: { $ne: null } }).lean();
+
+      if (nurseUsers.length > 0) {
+        const nurseEntryMap = {};
+        for (const entry of entries) {
+          const nid = entry.nurse_id.toString();
+          if (!nurseEntryMap[nid]) nurseEntryMap[nid] = [];
+          nurseEntryMap[nid].push(entry);
+        }
+
+        const shiftLabel = (t) => (t === "day" ? "Day (6AM-6PM)" : "Night (6PM-6AM)");
+
+        await Notification.insertMany(
+          nurseUsers.map((n) => {
+            const myEntries = nurseEntryMap[n._id.toString()] || [];
+            const shiftLines = myEntries
+              .sort((a, b) => a.duty_date.localeCompare(b.duty_date))
+              .map((e) => `• ${e.duty_date}  ${shiftLabel(e.shift_type)}`)
+              .join("\n");
+            return {
+              user_id: n.user_id,
+              title: "📅 Your Schedule for Week " + week_number,
+              message:
+                `Your schedule for week ${week_number} of ${year} has been published:\n\n` +
+                shiftLines +
+                "\n\nYou will also receive a reminder the evening before each shift and 30 minutes before it begins.",
+              notification_type: "schedule_published",
+              is_read: false,
+            };
+          })
+        );
       }
+    } catch (err) {
+      console.error("[GenerateSchedule] Notification insert for assigned nurses failed:", err);
+    }
 
-      const shiftLabel = (t) => (t === "day" ? "Day (6AM-6PM)" : "Night (6PM-6AM)");
+    // If this was an overwrite by a Head Nurse, notify all OTHER ward nurses about the change.
+    if (confirm_overwrite && req.authUser.role === "head_nurse") {
+      try {
+        const headName = req.authUser.name || "Your head nurse";
+        const wardUserIds = new Set();
+        for (const ward of targetWards) {
+          const nursesInWardWithUsers = await Nurse.find({ current_ward_id: ward._id, user_id: { $ne: null } }).lean();
+          for (const n of nursesInWardWithUsers) {
+            if (n.user_id) wardUserIds.add(String(n.user_id));
+          }
+        }
 
-      await Notification.insertMany(
-        nurseUsers.map((n) => {
-          const myEntries = nurseEntryMap[n._id.toString()] || [];
-          const shiftLines = myEntries
-            .sort((a, b) => a.duty_date.localeCompare(b.duty_date))
-            .map((e) => `• ${e.duty_date}  ${shiftLabel(e.shift_type)}`)
-            .join("\n");
-          return {
-            user_id: n.user_id,
-            title: "📅 Your Schedule for Week " + week_number,
-            message:
-              `Your schedule for week ${week_number} of ${year} has been published:\n\n` +
-              shiftLines +
-              "\n\nYou will also receive a reminder the evening before each shift and 30 minutes before it begins.",
-            notification_type: "schedule_published",
-            is_read: false,
-          };
-        })
-      );
+        // Batch-fetch already-notified user ids (nurses who got the personalised notification)
+        const alreadyNotifiedNurses = await Nurse.find({ _id: { $in: assignedNurseIds }, user_id: { $ne: null } }).lean();
+        const alreadyNotified = new Set(alreadyNotifiedNurses.map((n) => String(n.user_id)));
+
+        const toNotify = Array.from(wardUserIds).filter((uid) => !alreadyNotified.has(uid));
+        if (toNotify.length > 0) {
+          await Notification.insertMany(
+            toNotify.map((uid) => ({
+              user_id: uid,
+              title: "📢 Schedule Updated by Head Nurse",
+              message: `${headName} has updated the schedule for week ${week_number} of ${year}. Please check your schedule for any changes.`,
+              notification_type: "schedule_overwritten_by_head_nurse",
+              is_read: false,
+            }))
+          );
+        }
+      } catch (err) {
+        console.error("[GenerateSchedule] Overwrite notifications failed:", err);
+      }
     }
 
     await ActivityLog.create({

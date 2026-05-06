@@ -151,8 +151,28 @@ function shapeRow(table, row) {
       base.divisions = null;
       base.division_id = null;
     }
-    base.departments = row.department_id ? { name: row.department_id.name } : null;
-    base.wards = row.ward_id ? { name: row.ward_id.name } : null;
+    // Normalize department_id: populated object → string id
+    if (row.department_id && typeof row.department_id === "object" && row.department_id._id) {
+      base.departments = { id: row.department_id._id.toString(), name: row.department_id.name };
+      base.department_id = row.department_id._id.toString();
+    } else if (row.department_id) {
+      base.departments = null;
+      base.department_id = row.department_id.toString();
+    } else {
+      base.departments = null;
+      base.department_id = null;
+    }
+    // Normalize ward_id: populated object → string id
+    if (row.ward_id && typeof row.ward_id === "object" && row.ward_id._id) {
+      base.wards = { id: row.ward_id._id.toString(), name: row.ward_id.name };
+      base.ward_id = row.ward_id._id.toString();
+    } else if (row.ward_id) {
+      base.wards = null;
+      base.ward_id = row.ward_id.toString();
+    } else {
+      base.wards = null;
+      base.ward_id = null;
+    }
   }
   if (table === "schedules") {
     base.nurse = row.nurse_id
