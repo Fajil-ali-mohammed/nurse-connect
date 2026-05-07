@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/server.js",
+    "dev": "npx nodemon --watch src --ext js,mjs,json --exec \"node src/server.js\"",
     "start": "node src/server.js",
     "cleanup-indexes": "node scripts/cleanup-indexes.mjs",
     "create-test-users": "node scripts/create-test-users.mjs",
